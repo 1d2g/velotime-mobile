@@ -46,7 +46,7 @@ export default function ProjectsScreen() {
 
   const handleStartTimerOnTask = (projectId: string, taskId: string) => {
     startTimer(projectId, taskId);
-    router.replace('/(tabs)/');
+    router.replace('/(tabs)');
   };
 
   return (
