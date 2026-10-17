@@ -71,8 +71,10 @@ export default function ProjectsScreen() {
         {filteredProjects.map((project) => {
           const isExpanded = expandedProjectId === project.id;
           const loggedHours = getProjectLoggedHours(project.name);
-          const budgetHours = project.budgetHours || 160;
-          const pct = Math.min(100, Math.round((loggedHours / budgetHours) * 100));
+          const isTaskBudget = project.budgetType === 'TASK_HOURS';
+          const taskBudgetSum = project.tasks?.reduce((sum, t) => sum + (t.budgetHours || 0), 0) || 0;
+          const budgetHours = isTaskBudget ? taskBudgetSum : (project.budgetHours || project.budgetLimit || 160);
+          const pct = budgetHours > 0 ? Math.min(100, Math.round((loggedHours / budgetHours) * 100)) : 0;
 
           return (
             <View
@@ -109,7 +111,7 @@ export default function ProjectsScreen() {
               <View style={styles.budgetSection}>
                 <View style={styles.budgetRow}>
                   <Text style={[styles.budgetLabel, { color: colors.textDim }]}>
-                    {loggedHours.toFixed(1)} / {budgetHours} hrs logged
+                    {loggedHours.toFixed(1)} / {budgetHours} hrs logged{isTaskBudget ? ' (Tasks Sum)' : ''}
                   </Text>
                   <Text style={[styles.budgetPct, { color: pct > 90 ? colors.warning : colors.primary }]}>
                     {pct}% of budget
@@ -137,9 +139,15 @@ export default function ProjectsScreen() {
                       <View style={styles.taskInfo}>
                         <Text style={[styles.taskName, { color: colors.text }]}>{task.name}</Text>
                         <View style={styles.taskMetaRow}>
-                          <Text style={[styles.taskRate, { color: colors.textDim }]}>
-                            ${task.hourlyRate || project.hourlyRate || 160}/hr
-                          </Text>
+                          {task.budgetHours ? (
+                            <Text style={[styles.taskRate, { color: colors.textDim }]}>
+                              {task.budgetHours}h budget
+                            </Text>
+                          ) : (
+                            <Text style={[styles.taskRate, { color: colors.textDim }]}>
+                              ${task.hourlyRate || project.hourlyRate || 160}/hr
+                            </Text>
+                          )}
                           <Text style={[styles.taskBillable, { color: colors.primary }]}>
                             {task.isBillable !== false ? 'Billable' : 'Internal'}
                           </Text>

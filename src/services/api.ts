@@ -26,6 +26,7 @@ export interface Task {
   name: string;
   hourlyRate?: number;
   isBillable?: boolean;
+  budgetHours?: number;
 }
 
 export interface Project {
@@ -35,6 +36,8 @@ export interface Project {
   clientName?: string;
   hourlyRate?: number;
   budget?: number;
+  budgetLimit?: number;
+  budgetType?: string;
   budgetHours?: number;
   tasks: Task[];
 }
