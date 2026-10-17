@@ -1,15 +1,15 @@
 import { useFonts } from 'expo-font';
-import { DarkTheme, Stack, ThemeProvider } from 'expo-router';
+import { DarkTheme, DefaultTheme, Stack, ThemeProvider as NavThemeProvider } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect } from 'react';
 import 'react-native-reanimated';
 import { StatusBar } from 'expo-status-bar';
 
+import { ThemeProvider, useTheme } from '@/src/context/ThemeContext';
 import { AuthProvider } from '@/src/context/AuthContext';
 import { TimesheetProvider } from '@/src/context/TimesheetContext';
 
 export {
-  // Catch any errors thrown by the Layout component.
   ErrorBoundary,
 } from 'expo-router';
 
@@ -17,20 +17,7 @@ export const unstable_settings = {
   anchor: '(tabs)',
 };
 
-// Prevent the splash screen from auto-hiding before asset loading is complete.
 SplashScreen.preventAutoHideAsync();
-
-const VeloTimeTheme = {
-  ...DarkTheme,
-  colors: {
-    ...DarkTheme.colors,
-    background: '#090D16',
-    card: '#111827',
-    text: '#F8FAFC',
-    border: '#1E293B',
-    primary: '#10B981',
-  },
-};
 
 export default function RootLayout() {
   const [loaded, error] = useFonts({
@@ -51,21 +38,60 @@ export default function RootLayout() {
     return null;
   }
 
-  return <RootLayoutNav />;
+  return (
+    <ThemeProvider>
+      <AuthProvider>
+        <TimesheetProvider>
+          <RootLayoutNav />
+        </TimesheetProvider>
+      </AuthProvider>
+    </ThemeProvider>
+  );
 }
 
 function RootLayoutNav() {
+  const { colors, isDark } = useTheme();
+
+  const activeNavTheme = isDark
+    ? {
+        ...DarkTheme,
+        colors: {
+          ...DarkTheme.colors,
+          background: colors.bg,
+          card: colors.surface,
+          text: colors.text,
+          border: colors.borderSubtle,
+          primary: colors.primary,
+        },
+      }
+    : {
+        ...DefaultTheme,
+        colors: {
+          ...DefaultTheme.colors,
+          background: colors.bg,
+          card: colors.surface,
+          text: colors.text,
+          border: colors.borderSubtle,
+          primary: colors.primary,
+        },
+      };
+
   return (
-    <AuthProvider>
-      <TimesheetProvider>
-        <ThemeProvider value={VeloTimeTheme}>
-          <StatusBar style="light" />
-          <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: '#090D16' } }}>
-            <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-            <Stack.Screen name="modal" options={{ presentation: 'modal', headerShown: true, title: 'Session Details' }} />
-          </Stack>
-        </ThemeProvider>
-      </TimesheetProvider>
-    </AuthProvider>
+    <NavThemeProvider value={activeNavTheme}>
+      <StatusBar style={isDark ? 'light' : 'dark'} />
+      <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.bg } }}>
+        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+        <Stack.Screen
+          name="modal"
+          options={{
+            presentation: 'modal',
+            headerShown: true,
+            title: 'Session Details',
+            headerStyle: { backgroundColor: colors.surface },
+            headerTintColor: colors.text,
+          }}
+        />
+      </Stack>
+    </NavThemeProvider>
   );
 }

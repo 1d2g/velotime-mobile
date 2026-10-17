@@ -1,18 +1,20 @@
 import React from 'react';
 import { Tabs } from 'expo-router';
-import { View, StyleSheet, Platform } from 'react-native';
+import { View, Text, StyleSheet, Platform } from 'react-native';
 import { Timer, Calendar, Briefcase, Settings } from 'lucide-react-native';
-import { Colors } from '@/src/constants/theme';
+import { useTheme } from '@/src/context/ThemeContext';
 
 export default function TabLayout() {
+  const { colors } = useTheme();
+
   return (
     <Tabs
       screenOptions={{
-        tabBarActiveTintColor: Colors.primary,
-        tabBarInactiveTintColor: Colors.textDim,
+        tabBarActiveTintColor: colors.primary,
+        tabBarInactiveTintColor: colors.textDim,
         tabBarStyle: {
-          backgroundColor: Colors.surface,
-          borderTopColor: Colors.borderSubtle,
+          backgroundColor: colors.surface,
+          borderTopColor: colors.borderSubtle,
           borderTopWidth: 1,
           height: Platform.OS === 'ios' ? 88 : 64,
           paddingBottom: Platform.OS === 'ios' ? 28 : 10,
@@ -23,14 +25,14 @@ export default function TabLayout() {
           fontWeight: '600',
         },
         headerStyle: {
-          backgroundColor: Colors.bg,
-          borderBottomColor: Colors.borderSubtle,
+          backgroundColor: colors.surface,
+          borderBottomColor: colors.borderSubtle,
           borderBottomWidth: 1,
           elevation: 0,
           shadowOpacity: 0,
         },
         headerTitleStyle: {
-          color: Colors.text,
+          color: colors.text,
           fontSize: 18,
           fontWeight: '700',
           letterSpacing: -0.3,
@@ -41,8 +43,14 @@ export default function TabLayout() {
         name="index"
         options={{
           title: 'Timer',
-          headerTitle: 'VeloTime',
-          tabBarIcon: ({ color, size }) => <Timer color={color} size={22} strokeWidth={2.2} />,
+          headerTitle: () => (
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <Text style={{ fontSize: 16, fontWeight: '900', letterSpacing: 2, color: colors.text }}>
+                VELO<Text style={{ color: colors.primary }}>TIME</Text>
+              </Text>
+            </View>
+          ),
+          tabBarIcon: ({ color }) => <Timer color={color} size={22} strokeWidth={2.2} />,
         }}
       />
       <Tabs.Screen
@@ -50,7 +58,7 @@ export default function TabLayout() {
         options={{
           title: 'Week',
           headerTitle: 'Weekly Timesheet',
-          tabBarIcon: ({ color, size }) => <Calendar color={color} size={22} strokeWidth={2.2} />,
+          tabBarIcon: ({ color }) => <Calendar color={color} size={22} strokeWidth={2.2} />,
         }}
       />
       <Tabs.Screen
@@ -58,15 +66,15 @@ export default function TabLayout() {
         options={{
           title: 'Projects',
           headerTitle: 'Projects & Budgets',
-          tabBarIcon: ({ color, size }) => <Briefcase color={color} size={22} strokeWidth={2.2} />,
+          tabBarIcon: ({ color }) => <Briefcase color={color} size={22} strokeWidth={2.2} />,
         }}
       />
       <Tabs.Screen
         name="settings"
         options={{
           title: 'Settings',
-          headerTitle: 'Settings & Workspace',
-          tabBarIcon: ({ color, size }) => <Settings color={color} size={22} strokeWidth={2.2} />,
+          headerTitle: 'Settings & Theme',
+          tabBarIcon: ({ color }) => <Settings color={color} size={22} strokeWidth={2.2} />,
         }}
       />
     </Tabs>

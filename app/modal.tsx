@@ -2,40 +2,45 @@ import { StatusBar } from 'expo-status-bar';
 import { Platform, StyleSheet, View, Text, TouchableOpacity } from 'react-native';
 import { useNavigation } from 'expo-router';
 import { Clock, ShieldCheck, Zap } from 'lucide-react-native';
-import { Colors, Spacing, Radius } from '@/src/constants/theme';
+import { useTheme } from '@/src/context/ThemeContext';
+import { Spacing, Radius } from '@/src/constants/theme';
 
 export default function ModalScreen() {
   const navigation = useNavigation();
+  const { colors, isDark } = useTheme();
 
   return (
-    <View style={styles.container}>
-      <View style={styles.card}>
+    <View style={[styles.container, { backgroundColor: colors.bg }]}>
+      <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
         <View style={styles.header}>
-          <Clock color={Colors.primary} size={28} strokeWidth={2.2} />
-          <Text style={styles.title}>VeloTime Mobile</Text>
-          <Text style={styles.subtitle}>Native Architecture & Offline Sync</Text>
+          <Clock color={colors.primary} size={28} strokeWidth={2.2} />
+          <Text style={[styles.title, { color: colors.text }]}>VeloTime Mobile</Text>
+          <Text style={[styles.subtitle, { color: colors.textDim }]}>Native Architecture & Offline Sync</Text>
         </View>
 
         <View style={styles.infoRow}>
-          <ShieldCheck color={Colors.primary} size={18} style={{ marginRight: Spacing.sm }} />
-          <Text style={styles.infoText}>
+          <ShieldCheck color={colors.primary} size={18} style={{ marginRight: Spacing.sm }} />
+          <Text style={[styles.infoText, { color: colors.textMuted }]}>
             Full offline caching via AsyncStorage with automatic Railway cloud synchronization.
           </Text>
         </View>
 
         <View style={styles.infoRow}>
-          <Zap color={Colors.primary} size={18} style={{ marginRight: Spacing.sm }} />
-          <Text style={styles.infoText}>
+          <Zap color={colors.primary} size={18} style={{ marginRight: Spacing.sm }} />
+          <Text style={[styles.infoText, { color: colors.textMuted }]}>
             Haptic feedback and 60fps native performance built for high-throughput tracking.
           </Text>
         </View>
 
-        <TouchableOpacity style={styles.dismissBtn} onPress={() => navigation.goBack()}>
-          <Text style={styles.dismissBtnText}>Close Details</Text>
+        <TouchableOpacity
+          style={[styles.dismissBtn, { backgroundColor: colors.surfaceSubtle, borderColor: colors.borderSubtle }]}
+          onPress={() => navigation.goBack()}
+        >
+          <Text style={[styles.dismissBtnText, { color: colors.primary }]}>Close Details</Text>
         </TouchableOpacity>
       </View>
 
-      <StatusBar style={Platform.OS === 'ios' ? 'light' : 'auto'} />
+      <StatusBar style={isDark ? 'light' : 'dark'} />
     </View>
   );
 }
@@ -43,16 +48,13 @@ export default function ModalScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: Colors.bg,
     alignItems: 'center',
     justifyContent: 'center',
     padding: Spacing.xl,
   },
   card: {
-    backgroundColor: Colors.surface,
     borderRadius: Radius.lg,
     borderWidth: 1,
-    borderColor: Colors.border,
     padding: Spacing.xl,
     width: '100%',
     maxWidth: 400,
@@ -62,13 +64,11 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.xl,
   },
   title: {
-    color: Colors.text,
     fontSize: 20,
     fontWeight: '700',
     marginTop: Spacing.sm,
   },
   subtitle: {
-    color: Colors.textDim,
     fontSize: 13,
     marginTop: 2,
   },
@@ -78,15 +78,12 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.md,
   },
   infoText: {
-    color: Colors.textMuted,
     fontSize: 13,
     lineHeight: 18,
     flex: 1,
   },
   dismissBtn: {
-    backgroundColor: Colors.surfaceSubtle,
     borderWidth: 1,
-    borderColor: Colors.borderSubtle,
     borderRadius: Radius.md,
     height: 44,
     alignItems: 'center',
@@ -94,7 +91,6 @@ const styles = StyleSheet.create({
     marginTop: Spacing.lg,
   },
   dismissBtnText: {
-    color: Colors.primary,
     fontSize: 14,
     fontWeight: '700',
   },
