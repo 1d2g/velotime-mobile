@@ -69,7 +69,7 @@ export function ManualEntryModal({
   };
 
   return (
-    <Modal visible={visible} animationType="slide" transparent presentationStyle="pageSheet" onRequestClose={onClose}>
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <SafeAreaView style={[styles.overlay, { backgroundColor: isDark ? 'rgba(5, 8, 15, 0.85)' : 'rgba(15, 23, 42, 0.45)' }]}>
         <View style={[styles.sheet, { backgroundColor: colors.surface, borderTopColor: colors.border }]}>
           {/* Header */}

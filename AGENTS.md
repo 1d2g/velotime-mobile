@@ -37,5 +37,13 @@ Docs: https://docs.expo.dev/eas/index.md
 ## Rules
 
 - If `ios/` and `android/` directories do not exist, they are generated (Continuous Native Generation). Never create or edit them by hand — configure native behavior in `app.json` and config plugins.
-- Expo Go only includes its bundled native modules. After adding a library with native code, the app needs a development build: `npx expo run:ios|android` locally, or `eas build --profile development`.
 - Prefer recommended Expo modules over third-party libraries, and check your available skills before adding dependencies. Docs: https://docs.expo.dev/versions/latest/index.md
+
+## Strict Design Philosophy & Asset Guidelines
+
+1. **Zero AI Diffusion**: Never generate or use AI diffusion images or synthetic assets under any circumstances. Always use authentic VeloTime brand vectors, SVG assets, and existing project icons.
+2. **Strict Design Continuity**: Maintain 1:1 fidelity with the existing VeloTime web platform:
+   - Primary: VeloTime Brand Rose (`#F43F5E` / `#E11D48`)
+   - Slate Palette: Dark Slate (`#0F172A`), Light Body (`#E5E7EB`), Grid Borders (`#CBD5E1`), Card Surfaces (`#FFFFFF` in light, `#182032` in dark)
+   - Logo Wordmark: `VELO` (Slate) + `TIME` (Rose)
+3. **Zero Emojis**: Never use emoji characters anywhere in UI components, headers, or buttons. Use crisp vector icons (Lucide React Native).
