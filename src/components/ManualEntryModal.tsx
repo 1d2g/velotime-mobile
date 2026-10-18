@@ -21,6 +21,7 @@ interface ManualEntryModalProps {
   onClose: () => void;
   projects: Project[];
   defaultDate?: string;
+  initialDate?: string;
   onSave: (date: string, projectId: string, taskId: string, hours: number, note: string) => Promise<void>;
 }
 
@@ -31,17 +32,24 @@ export function ManualEntryModal({
   onClose,
   projects,
   defaultDate,
+  initialDate,
   onSave,
 }: ManualEntryModalProps) {
   const { colors, isDark } = useTheme();
-  const todayStr = new Date().toISOString().split('T')[0];
-  const [date, setDate] = useState(defaultDate || todayStr);
+  const effectiveDate = initialDate || defaultDate || new Date().toISOString().split('T')[0];
+  const [date, setDate] = useState(effectiveDate);
   const [projectId, setProjectId] = useState(projects[0]?.id || 'p1');
   const [taskId, setTaskId] = useState(projects[0]?.tasks[0]?.id || 't1_1');
   const [hours, setHours] = useState('1.0');
   const [note, setNote] = useState('');
   const [pickerOpen, setPickerOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  React.useEffect(() => {
+    if (visible) {
+      setDate(initialDate || defaultDate || new Date().toISOString().split('T')[0]);
+    }
+  }, [visible, initialDate, defaultDate]);
 
   const currentProject = projects.find((p) => p.id === projectId) || projects[0];
   const currentTask = currentProject?.tasks.find((t) => t.id === taskId) || currentProject?.tasks[0];

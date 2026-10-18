@@ -24,6 +24,8 @@ import {
   Moon,
   Monitor,
   Check,
+  Briefcase,
+  BarChart3,
 } from 'lucide-react-native';
 import { useAuth } from '@/src/context/AuthContext';
 import { useTimesheet } from '@/src/context/TimesheetContext';
@@ -32,7 +34,7 @@ import { Spacing, Radius, ThemeMode } from '@/src/constants/theme';
 
 export default function SettingsScreen() {
   const { colors, isDark, mode, setMode } = useTheme();
-  const { user, isDemoMode, syncStatus, enterDemoMode, signOut } = useAuth();
+  const { user, isDemoMode, syncStatus, enterDemoMode, signOut, previewRole, setPreviewRole, isManager } = useAuth();
   const { refreshData } = useTimesheet();
   const [isRefreshing, setIsRefreshing] = useState(false);
 
@@ -100,6 +102,67 @@ export default function SettingsScreen() {
               <Building color={colors.textDim} size={13} style={{ marginRight: 4 }} />
               <Text style={[styles.orgName, { color: colors.primary }]}>{user?.organization?.name || 'Metropolis Studio'}</Text>
             </View>
+          </View>
+        </View>
+
+        {/* Role & Workspace Mode Switcher */}
+        <Text style={[styles.sectionHeader, { color: colors.textDim }]}>WORKSPACE ROLE & NAVIGATION MODE</Text>
+        <View style={[styles.roleCard, { backgroundColor: colors.surface, borderColor: colors.borderSubtle }]}>
+          <Text style={[styles.rolePrompt, { color: colors.textMuted }]}>
+            Toggle between the full executive management suite (reports, approvals, financial dashboards) and the streamlined employee layout.
+          </Text>
+          <View style={styles.roleSegmentRow}>
+            <TouchableOpacity
+              style={[
+                styles.roleBtn,
+                previewRole !== 'employee'
+                  ? { backgroundColor: colors.primary, borderColor: colors.primary }
+                  : { backgroundColor: colors.surfaceSubtle, borderColor: colors.borderSubtle },
+              ]}
+              onPress={() => setPreviewRole('admin')}
+              activeOpacity={0.7}
+            >
+              <BarChart3
+                color={previewRole !== 'employee' ? '#FFFFFF' : colors.textDim}
+                size={16}
+                strokeWidth={2.2}
+                style={{ marginRight: 6 }}
+              />
+              <Text
+                style={[
+                  styles.roleBtnText,
+                  { color: previewRole !== 'employee' ? '#FFFFFF' : colors.textMuted },
+                ]}
+              >
+                Manager Mode
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.roleBtn,
+                previewRole === 'employee'
+                  ? { backgroundColor: colors.primary, borderColor: colors.primary }
+                  : { backgroundColor: colors.surfaceSubtle, borderColor: colors.borderSubtle },
+              ]}
+              onPress={() => setPreviewRole('employee')}
+              activeOpacity={0.7}
+            >
+              <Briefcase
+                color={previewRole === 'employee' ? '#FFFFFF' : colors.textDim}
+                size={16}
+                strokeWidth={2.2}
+                style={{ marginRight: 6 }}
+              />
+              <Text
+                style={[
+                  styles.roleBtnText,
+                  { color: previewRole === 'employee' ? '#FFFFFF' : colors.textMuted },
+                ]}
+              >
+                Employee Mode
+              </Text>
+            </TouchableOpacity>
           </View>
         </View>
 
@@ -307,6 +370,34 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
     marginBottom: Spacing.sm,
     paddingHorizontal: Spacing.xs,
+  },
+  roleCard: {
+    padding: Spacing.md,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    marginBottom: Spacing.xl,
+  },
+  rolePrompt: {
+    fontSize: 12,
+    lineHeight: 17,
+    marginBottom: Spacing.md,
+  },
+  roleSegmentRow: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+  },
+  roleBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    borderRadius: Radius.sm,
+    borderWidth: 1,
+  },
+  roleBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
   },
   themeSegmentContainer: {
     flexDirection: 'row',

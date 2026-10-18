@@ -8,6 +8,8 @@ import { StatusBar } from 'expo-status-bar';
 import { ThemeProvider, useTheme } from '@/src/context/ThemeContext';
 import { AuthProvider } from '@/src/context/AuthContext';
 import { TimesheetProvider } from '@/src/context/TimesheetContext';
+import { ExpenseProvider } from '@/src/context/ExpenseContext';
+import { ManagerProvider } from '@/src/context/ManagerContext';
 
 export {
   ErrorBoundary,
@@ -42,7 +44,11 @@ export default function RootLayout() {
     <ThemeProvider>
       <AuthProvider>
         <TimesheetProvider>
-          <RootLayoutNav />
+          <ExpenseProvider>
+            <ManagerProvider>
+              <RootLayoutNav />
+            </ManagerProvider>
+          </ExpenseProvider>
         </TimesheetProvider>
       </AuthProvider>
     </ThemeProvider>

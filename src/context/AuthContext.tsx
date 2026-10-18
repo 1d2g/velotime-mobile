@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { User, apiRequest, getStoredToken, setStoredToken } from '../services/api';
 
@@ -15,11 +15,16 @@ export const DEMO_USER: User = {
   },
 };
 
+export type UserRole = 'admin' | 'manager' | 'employee';
+
 interface AuthContextType {
   user: User | null;
   token: string | null;
   isLoading: boolean;
   isDemoMode: boolean;
+  previewRole: UserRole;
+  setPreviewRole: (role: UserRole) => void;
+  isManager: boolean;
   signIn: (email: string, token: string, userObj?: User) => Promise<void>;
   enterDemoMode: () => Promise<void>;
   signOut: () => Promise<void>;
@@ -34,7 +39,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isDemoMode, setIsDemoMode] = useState(false);
+  const [previewRole, setPreviewRoleState] = useState<UserRole>('admin');
   const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'offline'>('synced');
+
+  const setPreviewRole = (role: UserRole) => {
+    setPreviewRoleState(role);
+    AsyncStorage.setItem('velotime_preview_role', role).catch(() => {});
+  };
+
+  const isManager = useMemo(() => {
+    if (previewRole === 'employee') return false;
+    const baseRole = (user?.role || (isDemoMode ? 'admin' : 'employee')).toLowerCase();
+    return baseRole === 'admin' || baseRole === 'manager' || previewRole === 'admin' || previewRole === 'manager';
+  }, [user?.role, isDemoMode, previewRole]);
 
   useEffect(() => {
     async function loadInitialSession() {
@@ -42,6 +59,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const storedToken = await getStoredToken();
         const storedUser = await AsyncStorage.getItem('velotime_user');
         const storedDemo = await AsyncStorage.getItem('velotime_is_demo');
+        const storedPreviewRole = (await AsyncStorage.getItem('velotime_preview_role')) as UserRole | null;
+
+        if (storedPreviewRole) {
+          setPreviewRoleState(storedPreviewRole);
+        }
 
         if (storedDemo === 'true') {
           setIsDemoMode(true);
@@ -109,6 +131,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         token,
         isLoading,
         isDemoMode,
+        previewRole,
+        setPreviewRole,
+        isManager,
         signIn,
         enterDemoMode,
         signOut,

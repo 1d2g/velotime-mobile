@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useMemo, useRef } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
-import { Project, Entry, apiRequest } from '../services/api';
+import { Project, Entry, apiRequest, getLocalDateString } from '../services/api';
 import { useAuth } from './AuthContext';
 
 // Rich sample projects for instant mobile onboarding / offline mode
@@ -62,6 +62,11 @@ interface TimesheetContextType {
   todayTotalHours: number;
   weekTotalHours: number;
   todayEntries: Entry[];
+  weekOffset: number;
+  weekDates: { id: string; label: string; dateStr: string; isToday: boolean }[];
+  weekLabel: string;
+  submissionStatus: 'draft' | 'submitted' | 'approved' | 'rejected';
+  submissionRejectNote?: string;
   getEntriesForDate: (dateStr: string) => Entry[];
   startTimer: (projectId: string, taskId: string, note?: string) => void;
   pauseTimer: () => void;
@@ -73,7 +78,22 @@ interface TimesheetContextType {
   logManualEntry: (date: string, projectId: string, taskId: string, hours: number, note?: string) => Promise<void>;
   deleteEntry: (entryIdOrIndex: string | number) => Promise<void>;
   submitWeekTimesheet: () => Promise<void>;
-  weekDates: { id: string; label: string; dateStr: string; isToday: boolean }[];
+  goToPrevWeek: () => void;
+  goToNextWeek: () => void;
+  goToCurrentWeek: () => void;
+  addProject: (p: {
+    name: string;
+    clientName?: string;
+    hourlyRate?: number;
+    budget?: number;
+    budgetHours?: number;
+    budgetType?: string;
+    tasks: Array<{ name: string; hourlyRate?: number; isBillable?: boolean; budgetHours?: number }>;
+  }) => Promise<void>;
+  addTaskToProject: (
+    projectId: string,
+    task: { name: string; hourlyRate?: number; isBillable?: boolean; budgetHours?: number }
+  ) => Promise<void>;
   refreshData: () => Promise<void>;
 }
 
@@ -83,6 +103,9 @@ export function TimesheetProvider({ children }: { children: React.ReactNode }) {
   const { user, isDemoMode, setSyncStatus } = useAuth();
   const [projects, setProjects] = useState<Project[]>(INITIAL_MOBILE_PROJECTS);
   const [entries, setEntries] = useState<Entry[]>([]);
+  const [weekOffset, setWeekOffset] = useState<number>(0);
+  const [submissionStatus, setSubmissionStatus] = useState<'draft' | 'submitted' | 'approved' | 'rejected'>('draft');
+  const [submissionRejectNote, setSubmissionRejectNote] = useState<string | undefined>();
   
   // Stopwatch State
   const [activeTimer, setActiveTimer] = useState<ActiveTimer>({
@@ -96,26 +119,26 @@ export function TimesheetProvider({ children }: { children: React.ReactNode }) {
 
   const tickerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Generate current Monday - Sunday date items
+  // Generate current Monday - Sunday date items based on weekOffset
   const weekDates = useMemo(() => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
     const day = today.getDay();
-    const diff = today.getDate() - day + (day === 0 ? -6 : 1); // Monday
-    const monday = new Date(today.setDate(diff));
+    const diff = today.getDate() - day + (day === 0 ? -6 : 1); // Monday of current week
+    const targetMonday = new Date(today.setDate(diff + weekOffset * 7));
 
     const result = [];
     const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
     for (let i = 0; i < 7; i++) {
-      const d = new Date(monday);
-      d.setDate(monday.getDate() + i);
+      const d = new Date(targetMonday);
+      d.setDate(targetMonday.getDate() + i);
       const year = d.getFullYear();
       const month = String(d.getMonth() + 1).padStart(2, '0');
       const date = String(d.getDate()).padStart(2, '0');
       const id = `${year}-${month}-${date}`;
-      const actualToday = new Date().toISOString().split('T')[0];
+      const actualToday = getLocalDateString();
 
       result.push({
         id,
@@ -125,9 +148,37 @@ export function TimesheetProvider({ children }: { children: React.ReactNode }) {
       });
     }
     return result;
-  }, []);
+  }, [weekOffset]);
 
-  const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
+  const weekLabel = useMemo(() => {
+    if (weekDates.length === 0) return 'Current Week';
+    const first = weekDates[0];
+    const last = weekDates[6];
+    return `${first.dateStr} – ${last.dateStr}`;
+  }, [weekDates]);
+
+  const goToPrevWeek = () => {
+    try {
+      Haptics.selectionAsync();
+    } catch {}
+    setWeekOffset((prev) => prev - 1);
+  };
+
+  const goToNextWeek = () => {
+    try {
+      Haptics.selectionAsync();
+    } catch {}
+    setWeekOffset((prev) => prev + 1);
+  };
+
+  const goToCurrentWeek = () => {
+    try {
+      Haptics.selectionAsync();
+    } catch {}
+    setWeekOffset(0);
+  };
+
+  const todayStr = useMemo(() => getLocalDateString(), []);
 
   // Load initial entries & stored timer state
   useEffect(() => {
@@ -386,11 +437,97 @@ export function TimesheetProvider({ children }: { children: React.ReactNode }) {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch {}
 
+    setSubmissionStatus('submitted');
+    await AsyncStorage.setItem('velotime_mobile_submission_status', 'submitted');
+
     if (!isDemoMode && user) {
       const weekStartId = weekDates[0]?.id;
       if (weekStartId) {
-        await apiRequest('/api/timesheet/submit', 'POST', { weekStartDate: weekStartId });
+        try {
+          await apiRequest('/api/timesheet/submit', 'POST', { weekStartDate: weekStartId });
+        } catch {}
       }
+    }
+  };
+
+  const addProject = async (p: {
+    name: string;
+    clientName?: string;
+    hourlyRate?: number;
+    budget?: number;
+    budgetHours?: number;
+    budgetType?: string;
+    tasks: Array<{ name: string; hourlyRate?: number; isBillable?: boolean; budgetHours?: number }>;
+  }) => {
+    try {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch {}
+
+    const newProject: Project = {
+      id: 'p_' + Date.now(),
+      name: p.name.trim(),
+      clientName: p.clientName?.trim() || 'General Client',
+      hourlyRate: p.hourlyRate || 165,
+      budget: p.budget || 15000,
+      budgetHours: p.budgetHours || 100,
+      budgetType: p.budgetType || 'PROJECT_HOURS',
+      tasks: (p.tasks || []).map((t, idx) => ({
+        id: `t_${Date.now()}_${idx}`,
+        name: t.name.trim(),
+        hourlyRate: t.hourlyRate || p.hourlyRate || 165,
+        isBillable: t.isBillable !== false,
+        budgetHours: t.budgetHours,
+      })),
+    };
+
+    if (newProject.tasks.length === 0) {
+      newProject.tasks = [{ id: `t_${Date.now()}_0`, name: 'General Work', hourlyRate: newProject.hourlyRate, isBillable: true }];
+    }
+
+    const updated = [newProject, ...projects];
+    setProjects(updated);
+    await AsyncStorage.setItem('velotime_offline_projects', JSON.stringify(updated));
+
+    if (!isDemoMode && user) {
+      try {
+        await apiRequest('/api/projects', 'POST', newProject);
+      } catch {}
+    }
+  };
+
+  const addTaskToProject = async (
+    projectId: string,
+    task: { name: string; hourlyRate?: number; isBillable?: boolean; budgetHours?: number }
+  ) => {
+    try {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch {}
+
+    const newTask = {
+      id: `t_${Date.now()}`,
+      name: task.name.trim(),
+      hourlyRate: task.hourlyRate || 165,
+      isBillable: task.isBillable !== false,
+      budgetHours: task.budgetHours,
+    };
+
+    const updated = projects.map((p) => {
+      if (p.id === projectId) {
+        return {
+          ...p,
+          tasks: [...p.tasks, newTask],
+        };
+      }
+      return p;
+    });
+
+    setProjects(updated);
+    await AsyncStorage.setItem('velotime_offline_projects', JSON.stringify(updated));
+
+    if (!isDemoMode && user) {
+      try {
+        await apiRequest(`/api/projects/${projectId}/tasks`, 'POST', newTask);
+      } catch {}
     }
   };
 
@@ -437,6 +574,11 @@ export function TimesheetProvider({ children }: { children: React.ReactNode }) {
         todayTotalHours,
         weekTotalHours,
         todayEntries,
+        weekOffset,
+        weekDates,
+        weekLabel,
+        submissionStatus,
+        submissionRejectNote,
         getEntriesForDate,
         startTimer,
         pauseTimer,
@@ -448,7 +590,11 @@ export function TimesheetProvider({ children }: { children: React.ReactNode }) {
         logManualEntry,
         deleteEntry,
         submitWeekTimesheet,
-        weekDates,
+        goToPrevWeek,
+        goToNextWeek,
+        goToCurrentWeek,
+        addProject,
+        addTaskToProject,
         refreshData,
       }}
     >

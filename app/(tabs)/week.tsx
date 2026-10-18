@@ -14,12 +14,17 @@ import {
   Clock,
   Plus,
   Trash2,
+  ChevronLeft,
+  ChevronRight,
+  Check,
+  AlertTriangle,
 } from 'lucide-react-native';
 import { useAuth } from '@/src/context/AuthContext';
 import { useTimesheet } from '@/src/context/TimesheetContext';
 import { useTheme } from '@/src/context/ThemeContext';
 import { Spacing, Radius } from '@/src/constants/theme';
 import { ManualEntryModal } from '@/src/components/ManualEntryModal';
+import { getLocalDateString } from '@/src/services/api';
 
 export default function WeekScreen() {
   const { colors, isDark } = useTheme();
@@ -27,27 +32,44 @@ export default function WeekScreen() {
   const {
     projects,
     entries,
+    weekOffset,
     weekDates,
+    weekLabel,
     weekTotalHours,
+    submissionStatus,
+    submissionRejectNote,
     logManualEntry,
     deleteEntry,
     submitWeekTimesheet,
+    goToPrevWeek,
+    goToNextWeek,
+    goToCurrentWeek,
   } = useTimesheet();
 
+  const [viewMode, setViewMode] = useState<'week' | 'day'>('week');
   const [selectedDayId, setSelectedDayId] = useState<string>('all');
   const [manualModalVisible, setManualModalVisible] = useState(false);
-  const [targetDateForEntry, setTargetDateForEntry] = useState<string>(
-    new Date().toISOString().split('T')[0]
-  );
-  const [isSubmitted, setIsSubmitted] = useState(false);
+  const [targetDateForEntry, setTargetDateForEntry] = useState<string>(getLocalDateString());
+
+  const activeDayDate = useMemo(() => {
+    if (selectedDayId !== 'all') {
+      return selectedDayId;
+    }
+    const todayStr = getLocalDateString();
+    const found = weekDates.find((d) => d.id === todayStr);
+    return found ? found.id : weekDates[0]?.id || todayStr;
+  }, [selectedDayId, weekDates]);
 
   const displayedEntries = useMemo(() => {
+    if (viewMode === 'day') {
+      return entries.filter((e) => e.date === activeDayDate);
+    }
     if (selectedDayId === 'all') {
       const weekDateSet = new Set(weekDates.map((d) => d.id));
       return entries.filter((e) => weekDateSet.has(e.date));
     }
     return entries.filter((e) => e.date === selectedDayId);
-  }, [entries, selectedDayId, weekDates]);
+  }, [entries, viewMode, activeDayDate, selectedDayId, weekDates]);
 
   const dailyTotals = useMemo(() => {
     const map: Record<string, number> = {};
@@ -62,6 +84,10 @@ export default function WeekScreen() {
     return map;
   }, [entries, weekDates]);
 
+  const dayTotalHours = useMemo(() => {
+    return dailyTotals[activeDayDate] || 0;
+  }, [dailyTotals, activeDayDate]);
+
   const { billablePercentage } = useMemo(() => {
     const billable = displayedEntries
       .filter((e) => e.isBillable !== false)
@@ -74,14 +100,13 @@ export default function WeekScreen() {
   const handleSubmitWeek = async () => {
     Alert.alert(
       'Submit Timesheet',
-      `Submit your ${weekTotalHours.toFixed(2)} hours for this week for manager/payroll review?`,
+      `Submit your ${weekTotalHours.toFixed(2)} hours for ${weekLabel} for manager/payroll review?`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Submit Timesheet',
           onPress: async () => {
             await submitWeekTimesheet();
-            setIsSubmitted(true);
             Alert.alert(
               'Timesheet Submitted',
               'Your timesheet has been submitted successfully and locked for approval.'
@@ -111,133 +136,228 @@ export default function WeekScreen() {
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: colors.bg }]}>
       <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
-        {/* Weekly Header Summary Card */}
-        <View style={[styles.summaryCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-          <View style={styles.summaryHeader}>
-            <View>
-              <Text style={[styles.summaryTitle, { color: colors.text }]}>Current Week</Text>
-              <Text style={[styles.summarySubtitle, { color: colors.textMuted }]}>
-                {weekDates[0]?.dateStr} – {weekDates[6]?.dateStr}
-              </Text>
-            </View>
-            <View
+        {/* Week Navigation Header Bar */}
+        <View style={[styles.navCard, { backgroundColor: colors.surface, borderColor: colors.borderSubtle }]}>
+          <View style={styles.navControls}>
+            <TouchableOpacity
+              onPress={goToPrevWeek}
+              style={[styles.navArrowBtn, { borderColor: colors.borderSubtle }]}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <ChevronLeft color={colors.text} size={18} />
+            </TouchableOpacity>
+
+            <TouchableOpacity onPress={goToCurrentWeek} style={styles.navTitleCenter}>
+              <Text style={[styles.navWeekTitle, { color: colors.text }]}>{weekLabel}</Text>
+              {weekOffset !== 0 ? (
+                <Text style={[styles.jumpTodayText, { color: colors.primary }]}>Jump to Today</Text>
+              ) : (
+                <Text style={[styles.currentWeekTag, { color: colors.textMuted }]}>Current Active Week</Text>
+              )}
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={goToNextWeek}
+              style={[styles.navArrowBtn, { borderColor: colors.borderSubtle }]}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <ChevronRight color={colors.text} size={18} />
+            </TouchableOpacity>
+          </View>
+
+          {/* View Mode Switcher: Day vs Week */}
+          <View style={[styles.modeSwitcher, { backgroundColor: colors.surfaceSubtle }]}>
+            <TouchableOpacity
               style={[
-                styles.statusBadge,
-                isSubmitted
-                  ? { backgroundColor: colors.primaryMuted, borderColor: colors.primary }
-                  : { backgroundColor: colors.surfaceSubtle, borderColor: colors.borderSubtle },
+                styles.modeBtn,
+                viewMode === 'week' && [styles.modeBtnActive, { backgroundColor: colors.surface }],
               ]}
+              onPress={() => setViewMode('week')}
             >
               <Text
                 style={[
-                  styles.statusBadgeText,
-                  { color: isSubmitted ? colors.primary : colors.textMuted },
+                  styles.modeBtnText,
+                  { color: viewMode === 'week' ? colors.primary : colors.textMuted },
                 ]}
               >
-                {isSubmitted ? 'SUBMITTED' : 'DRAFT'}
+                Week Matrix
               </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.modeBtn,
+                viewMode === 'day' && [styles.modeBtnActive, { backgroundColor: colors.surface }],
+              ]}
+              onPress={() => setViewMode('day')}
+            >
+              <Text
+                style={[
+                  styles.modeBtnText,
+                  { color: viewMode === 'day' ? colors.primary : colors.textMuted },
+                ]}
+              >
+                Day View
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* Submission Status Banner */}
+        <View
+          style={[
+            styles.statusBanner,
+            submissionStatus === 'approved'
+              ? { backgroundColor: '#10B98115', borderColor: '#10B98150' }
+              : submissionStatus === 'submitted'
+              ? { backgroundColor: `${colors.primary}12`, borderColor: `${colors.primary}50` }
+              : submissionStatus === 'rejected'
+              ? { backgroundColor: '#E11D4815', borderColor: '#E11D4850' }
+              : { backgroundColor: colors.surface, borderColor: colors.borderSubtle },
+          ]}
+        >
+          <View style={styles.statusBannerLeft}>
+            {submissionStatus === 'approved' ? (
+              <Check color="#10B981" size={16} strokeWidth={2.5} style={{ marginRight: 6 }} />
+            ) : submissionStatus === 'submitted' ? (
+              <Clock color={colors.primary} size={16} strokeWidth={2.2} style={{ marginRight: 6 }} />
+            ) : submissionStatus === 'rejected' ? (
+              <AlertTriangle color="#E11D48" size={16} strokeWidth={2.2} style={{ marginRight: 6 }} />
+            ) : (
+              <Calendar color={colors.textDim} size={16} strokeWidth={2.2} style={{ marginRight: 6 }} />
+            )}
+            <View>
+              <Text
+                style={[
+                  styles.statusBannerTitle,
+                  {
+                    color:
+                      submissionStatus === 'approved'
+                        ? '#059669'
+                        : submissionStatus === 'submitted'
+                        ? colors.primary
+                        : submissionStatus === 'rejected'
+                        ? '#E11D48'
+                        : colors.text,
+                  },
+                ]}
+              >
+                {submissionStatus === 'approved'
+                  ? 'Timesheet Approved by Manager'
+                  : submissionStatus === 'submitted'
+                  ? 'Submitted • Awaiting Manager Approval'
+                  : submissionStatus === 'rejected'
+                  ? 'Returned for Revision'
+                  : 'Weekly Timesheet Draft'}
+              </Text>
+              {submissionRejectNote && submissionStatus === 'rejected' && (
+                <Text style={[styles.statusRejectNote, { color: '#E11D48' }]}>
+                  Feedback: {submissionRejectNote}
+                </Text>
+              )}
             </View>
           </View>
 
-          <View style={[styles.summaryMetricsRow, { backgroundColor: colors.surfaceSubtle, borderColor: colors.borderSubtle }]}>
+          {submissionStatus === 'draft' || submissionStatus === 'rejected' ? (
+            <TouchableOpacity
+              style={[styles.submitActionBtn, { backgroundColor: colors.primary }]}
+              onPress={handleSubmitWeek}
+              disabled={weekTotalHours === 0}
+            >
+              <Text style={styles.submitActionBtnText}>Submit Week</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+
+        {/* Summary Metrics Row */}
+        <View style={[styles.summaryCard, { backgroundColor: colors.surface, borderColor: colors.borderSubtle }]}>
+          <View style={styles.summaryMetricsRow}>
             <View style={styles.metricItem}>
-              <Text style={[styles.metricValue, { color: colors.text }]}>{weekTotalHours.toFixed(2)}</Text>
-              <Text style={[styles.metricLabel, { color: colors.textDim }]}>Total Hours</Text>
+              <Text style={[styles.metricValue, { color: colors.text }]}>
+                {viewMode === 'day' ? dayTotalHours.toFixed(1) : weekTotalHours.toFixed(1)}h
+              </Text>
+              <Text style={[styles.metricLabel, { color: colors.textDim }]}>
+                {viewMode === 'day' ? 'Day Hours' : 'Week Total'}
+              </Text>
             </View>
             <View style={[styles.metricDivider, { backgroundColor: colors.borderSubtle }]} />
             <View style={styles.metricItem}>
-              <Text style={[styles.metricValue, { color: colors.text }]}>{billablePercentage}%</Text>
+              <Text style={[styles.metricValue, { color: colors.primary }]}>{billablePercentage}%</Text>
               <Text style={[styles.metricLabel, { color: colors.textDim }]}>Billable</Text>
             </View>
             <View style={[styles.metricDivider, { backgroundColor: colors.borderSubtle }]} />
             <View style={styles.metricItem}>
-              <Text style={[styles.metricValue, { color: colors.text }]}>{Math.max(0, 40 - weekTotalHours).toFixed(1)}h</Text>
-              <Text style={[styles.metricLabel, { color: colors.textDim }]}>To 40h Target</Text>
+              <Text style={[styles.metricValue, { color: colors.text }]}>
+                {viewMode === 'day'
+                  ? Math.max(0, 8.0 - dayTotalHours).toFixed(1)
+                  : Math.max(0, 40.0 - weekTotalHours).toFixed(1)}h
+              </Text>
+              <Text style={[styles.metricLabel, { color: colors.textDim }]}>
+                {viewMode === 'day' ? 'To 8h Target' : 'To 40h Target'}
+              </Text>
             </View>
           </View>
 
-          {/* Target Progress Bar */}
-          <View style={[styles.progressBarBg, { backgroundColor: colors.inputBg, borderColor: colors.borderSubtle }]}>
+          {/* Progress Bar */}
+          <View style={[styles.progressTrack, { backgroundColor: colors.surfaceSubtle }]}>
             <View
               style={[
-                styles.progressBarFill,
+                styles.progressFill,
                 {
                   backgroundColor: colors.primary,
-                  width: `${Math.min(100, (weekTotalHours / 40) * 100)}%`,
+                  width: `${Math.min(
+                    100,
+                    viewMode === 'day' ? (dayTotalHours / 8.0) * 100 : (weekTotalHours / 40.0) * 100
+                  )}%`,
                 },
               ]}
             />
           </View>
-
-          {/* Submit Action Button */}
-          <TouchableOpacity
-            style={[
-              styles.submitBtn,
-              { backgroundColor: isSubmitted ? colors.surfaceSubtle : colors.primary },
-              isSubmitted && { borderWidth: 1, borderColor: colors.borderSubtle },
-            ]}
-            onPress={handleSubmitWeek}
-            disabled={isSubmitted || weekTotalHours === 0}
-            activeOpacity={0.8}
-          >
-            <CheckCheck
-              color={isSubmitted ? colors.textDim : '#FFFFFF'}
-              size={18}
-              strokeWidth={2.5}
-              style={{ marginRight: Spacing.sm }}
-            />
-            <Text
-              style={[
-                styles.submitBtnText,
-                { color: isSubmitted ? colors.textDim : '#FFFFFF' },
-              ]}
-            >
-              {isSubmitted ? 'Timesheet Submitted' : 'Submit Week for Review'}
-            </Text>
-          </TouchableOpacity>
         </View>
 
-        {/* Day Selector Pills Bar */}
-        <Text style={[styles.filterSectionTitle, { color: colors.textDim }]}>SELECT DAY</Text>
+        {/* Day Selector Pills Bar (Shown in both Week and Day mode) */}
+        <Text style={[styles.filterSectionTitle, { color: colors.textDim }]}>
+          {viewMode === 'day' ? 'SELECT DAY TO VIEW' : 'FILTER BY DAY'}
+        </Text>
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
           style={styles.daySelectorScroll}
           contentContainerStyle={styles.daySelectorContent}
         >
-          {/* All Week Pill */}
-          <TouchableOpacity
-            style={[
-              styles.dayPill,
-              {
-                backgroundColor: selectedDayId === 'all' ? colors.primaryMuted : colors.surface,
-                borderColor: selectedDayId === 'all' ? colors.primary : colors.borderSubtle,
-              },
-            ]}
-            onPress={() => setSelectedDayId('all')}
-            activeOpacity={0.7}
-          >
-            <Text
+          {viewMode === 'week' && (
+            <TouchableOpacity
               style={[
-                styles.dayLabel,
-                { color: selectedDayId === 'all' ? colors.primary : colors.textMuted },
+                styles.dayPill,
+                {
+                  backgroundColor: selectedDayId === 'all' ? `${colors.primary}18` : colors.surface,
+                  borderColor: selectedDayId === 'all' ? colors.primary : colors.borderSubtle,
+                },
               ]}
+              onPress={() => setSelectedDayId('all')}
+              activeOpacity={0.7}
             >
-              All
-            </Text>
-            <Text
-              style={[
-                styles.dayHours,
-                { color: selectedDayId === 'all' ? colors.primaryText : colors.text },
-              ]}
-            >
-              {weekTotalHours.toFixed(1)}h
-            </Text>
-          </TouchableOpacity>
+              <Text
+                style={[
+                  styles.dayLabel,
+                  { color: selectedDayId === 'all' ? colors.primary : colors.textMuted },
+                ]}
+              >
+                All
+              </Text>
+              <Text
+                style={[
+                  styles.dayHours,
+                  { color: selectedDayId === 'all' ? colors.primary : colors.text },
+                ]}
+              >
+                {weekTotalHours.toFixed(1)}h
+              </Text>
+            </TouchableOpacity>
+          )}
 
-          {/* Individual Day Pills */}
           {weekDates.map((day) => {
-            const isSelected = selectedDayId === day.id;
+            const isSelected = viewMode === 'day' ? activeDayDate === day.id : selectedDayId === day.id;
             const hours = dailyTotals[day.id] || 0;
             return (
               <TouchableOpacity
@@ -245,11 +365,13 @@ export default function WeekScreen() {
                 style={[
                   styles.dayPill,
                   {
-                    backgroundColor: isSelected ? colors.primaryMuted : colors.surface,
+                    backgroundColor: isSelected ? `${colors.primary}18` : colors.surface,
                     borderColor: isSelected ? colors.primary : colors.borderSubtle,
                   },
                 ]}
-                onPress={() => setSelectedDayId(day.id)}
+                onPress={() => {
+                  setSelectedDayId(day.id);
+                }}
                 activeOpacity={0.7}
               >
                 <View style={styles.dayPillHeader}>
@@ -269,7 +391,7 @@ export default function WeekScreen() {
                 <Text
                   style={[
                     styles.dayHours,
-                    { color: isSelected ? colors.primaryText : colors.text },
+                    { color: isSelected ? colors.primary : colors.text },
                   ]}
                 >
                   {hours > 0 ? `${hours.toFixed(1)}h` : '–'}
@@ -283,7 +405,11 @@ export default function WeekScreen() {
         <View style={styles.entriesSectionHeader}>
           <View>
             <Text style={[styles.entriesSectionTitle, { color: colors.text }]}>
-              {selectedDayId === 'all' ? 'All Week Entries' : `Entries for ${selectedDayId}`}
+              {viewMode === 'day'
+                ? `Entries for ${activeDayDate}`
+                : selectedDayId === 'all'
+                ? 'All Week Entries'
+                : `Entries for ${selectedDayId}`}
             </Text>
             <Text style={[styles.entriesSectionSubtitle, { color: colors.textDim }]}>
               {displayedEntries.length} {displayedEntries.length === 1 ? 'entry' : 'entries'} ·{' '}
@@ -292,41 +418,48 @@ export default function WeekScreen() {
           </View>
 
           <TouchableOpacity
-            style={[styles.addTimeBtn, { backgroundColor: colors.surfaceSubtle, borderColor: colors.borderSubtle }]}
+            style={[styles.addTimeBtn, { backgroundColor: colors.primary }]}
             onPress={() =>
               handleOpenAddForDay(
-                selectedDayId === 'all' ? new Date().toISOString().split('T')[0] : selectedDayId
+                viewMode === 'day'
+                  ? activeDayDate
+                  : selectedDayId === 'all'
+                  ? getLocalDateString()
+                  : selectedDayId
               )
             }
-            activeOpacity={0.7}
+            activeOpacity={0.8}
           >
-            <Plus color={colors.primary} size={16} strokeWidth={2.5} style={{ marginRight: 4 }} />
-            <Text style={[styles.addTimeBtnText, { color: colors.primary }]}>Add</Text>
+            <Plus color="#FFFFFF" size={15} strokeWidth={2.5} style={{ marginRight: 4 }} />
+            <Text style={styles.addTimeBtnText}>Add Time</Text>
           </TouchableOpacity>
         </View>
 
         {/* Entries List */}
         {displayedEntries.length === 0 ? (
           <View style={[styles.emptyDayCard, { backgroundColor: colors.surface, borderColor: colors.borderSubtle }]}>
-            <Clock color={colors.border} size={28} strokeWidth={1.5} style={{ marginBottom: Spacing.sm }} />
-            <Text style={[styles.emptyDayText, { color: colors.textMuted }]}>No entries for this selection</Text>
+            <Clock color={colors.textDim} size={28} strokeWidth={1.5} style={{ marginBottom: Spacing.sm }} />
+            <Text style={[styles.emptyDayText, { color: colors.textMuted }]}>No entries recorded for this day</Text>
             <TouchableOpacity
-              style={[styles.emptyDayAddBtn, { backgroundColor: colors.surfaceSubtle, borderColor: colors.borderSubtle }]}
+              style={[styles.emptyDayAddBtn, { backgroundColor: colors.primary }]}
               onPress={() =>
                 handleOpenAddForDay(
-                  selectedDayId === 'all' ? new Date().toISOString().split('T')[0] : selectedDayId
+                  viewMode === 'day'
+                    ? activeDayDate
+                    : selectedDayId === 'all'
+                    ? getLocalDateString()
+                    : selectedDayId
                 )
               }
             >
-              <Text style={[styles.emptyDayAddBtnText, { color: colors.primary }]}>Log Time Now</Text>
+              <Text style={styles.emptyDayAddBtnText}>Log Time Now</Text>
             </TouchableOpacity>
           </View>
         ) : (
           displayedEntries.map((entry, idx) => (
             <View
               key={entry.id || idx}
-              style={[styles.entryCard, { backgroundColor: colors.surface, borderColor: colors.borderSubtle }]}
-            >
+              style={[styles.entryCard, { backgroundColor: colors.surface, borderColor: colors.borderSubtle }]}>
               <View style={styles.entryHeader}>
                 <View style={styles.entryProjectInfo}>
                   <Text style={[styles.entryProjectName, { color: colors.text }]}>{entry.projectName}</Text>
@@ -366,11 +499,12 @@ export default function WeekScreen() {
       <ManualEntryModal
         visible={manualModalVisible}
         onClose={() => setManualModalVisible(false)}
-        projects={projects}
-        defaultDate={targetDateForEntry}
-        onSave={async (d, p, t, h, n) => {
-          await logManualEntry(d, p, t, h, n);
+        initialDate={targetDateForEntry}
+        onSave={async (date, projectId, taskId, hours, note) => {
+          await logManualEntry(date, projectId, taskId, hours, note);
+          setManualModalVisible(false);
         }}
+        projects={projects}
       />
     </SafeAreaView>
   );
@@ -384,50 +518,110 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   contentContainer: {
-    padding: Spacing.lg,
-    paddingBottom: Spacing.xxxl * 2,
+    padding: Spacing.md,
+    paddingBottom: Spacing.xxl * 2,
   },
-  summaryCard: {
-    borderRadius: Radius.lg,
+  navCard: {
+    borderRadius: Radius.xs,
     borderWidth: 1,
-    padding: Spacing.lg,
-    marginBottom: Spacing.lg,
+    padding: Spacing.md,
+    marginBottom: Spacing.sm,
   },
-  summaryHeader: {
+  navControls: {
     flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: Spacing.lg,
+    marginBottom: Spacing.sm,
   },
-  summaryTitle: {
-    fontSize: 18,
+  navArrowBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: Radius.xs,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  navTitleCenter: {
+    alignItems: 'center',
+  },
+  navWeekTitle: {
+    fontSize: 15,
     fontWeight: '700',
-    letterSpacing: -0.3,
   },
-  summarySubtitle: {
-    fontSize: 13,
+  currentWeekTag: {
+    fontSize: 11,
     marginTop: 2,
   },
-  statusBadge: {
-    paddingVertical: 4,
-    paddingHorizontal: 8,
-    borderRadius: Radius.sm,
-    borderWidth: 1,
+  jumpTodayText: {
+    fontSize: 11,
+    fontWeight: '700',
+    marginTop: 2,
   },
-  statusBadgeText: {
-    fontSize: 10,
+  modeSwitcher: {
+    flexDirection: 'row',
+    borderRadius: Radius.xs,
+    padding: 3,
+  },
+  modeBtn: {
+    flex: 1,
+    paddingVertical: 6,
+    borderRadius: Radius.xs,
+    alignItems: 'center',
+  },
+  modeBtnActive: {
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 1,
+    elevation: 1,
+  },
+  modeBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  statusBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: Spacing.md,
+    borderRadius: Radius.xs,
+    borderWidth: 1,
+    marginBottom: Spacing.sm,
+  },
+  statusBannerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  statusBannerTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  statusRejectNote: {
+    fontSize: 11,
+    marginTop: 2,
+    fontWeight: '600',
+  },
+  submitActionBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: Radius.xs,
+  },
+  submitActionBtnText: {
+    color: '#FFFFFF',
+    fontSize: 11,
     fontWeight: '800',
-    letterSpacing: 0.8,
+  },
+  summaryCard: {
+    padding: Spacing.md,
+    borderRadius: Radius.xs,
+    borderWidth: 1,
+    marginBottom: Spacing.md,
   },
   summaryMetricsRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    paddingVertical: Spacing.md,
-    paddingHorizontal: Spacing.sm,
-    marginBottom: Spacing.md,
   },
   metricItem: {
     flex: 1,
@@ -435,10 +629,11 @@ const styles = StyleSheet.create({
   },
   metricValue: {
     fontSize: 18,
-    fontWeight: '700',
+    fontWeight: '800',
+    letterSpacing: -0.3,
   },
   metricLabel: {
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '600',
     marginTop: 2,
   },
@@ -446,55 +641,42 @@ const styles = StyleSheet.create({
     width: 1,
     height: 24,
   },
-  progressBarBg: {
-    height: 6,
-    borderRadius: Radius.full,
+  progressTrack: {
+    height: 5,
+    borderRadius: 2.5,
     overflow: 'hidden',
-    marginBottom: Spacing.lg,
-    borderWidth: 1,
+    marginTop: Spacing.md,
   },
-  progressBarFill: {
+  progressFill: {
     height: '100%',
-    borderRadius: Radius.full,
-  },
-  submitBtn: {
-    borderRadius: Radius.md,
-    height: 46,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  submitBtnText: {
-    fontSize: 14,
-    fontWeight: '700',
+    borderRadius: 2.5,
   },
   filterSectionTitle: {
-    fontSize: 11,
-    fontWeight: '700',
+    fontSize: 10,
+    fontWeight: '800',
     letterSpacing: 0.8,
-    marginBottom: Spacing.sm,
-    paddingHorizontal: Spacing.xs,
+    marginBottom: Spacing.xs,
   },
   daySelectorScroll: {
-    marginBottom: Spacing.xl,
+    marginBottom: Spacing.md,
   },
   daySelectorContent: {
-    gap: Spacing.xs + 2,
+    gap: 6,
   },
   dayPill: {
-    borderWidth: 1,
-    borderRadius: Radius.md,
     paddingVertical: 8,
     paddingHorizontal: 12,
-    minWidth: 58,
+    borderRadius: Radius.xs,
+    borderWidth: 1,
     alignItems: 'center',
+    minWidth: 54,
   },
   dayPillHeader: {
     flexDirection: 'row',
     alignItems: 'center',
   },
   dayLabel: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '700',
   },
   todayIndicatorDot: {
@@ -505,75 +687,76 @@ const styles = StyleSheet.create({
   },
   dayDateStr: {
     fontSize: 10,
-    marginTop: 2,
+    marginTop: 1,
   },
   dayHours: {
     fontSize: 12,
-    fontWeight: '700',
-    marginTop: 4,
+    fontWeight: '800',
+    marginTop: 3,
   },
   entriesSectionHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: Spacing.md,
-    paddingHorizontal: Spacing.xs,
+    marginBottom: Spacing.sm,
   },
   entriesSectionTitle: {
     fontSize: 15,
     fontWeight: '700',
+    letterSpacing: -0.2,
   },
   entriesSectionSubtitle: {
-    fontSize: 12,
-    marginTop: 2,
+    fontSize: 11,
+    marginTop: 1,
   },
   addTimeBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderWidth: 1,
-    paddingVertical: 5,
-    paddingHorizontal: 10,
-    borderRadius: Radius.sm,
+    paddingVertical: 6,
+    paddingHorizontal: 11,
+    borderRadius: Radius.xs,
   },
   addTimeBtnText: {
+    color: '#FFFFFF',
     fontSize: 12,
     fontWeight: '700',
   },
   emptyDayCard: {
-    borderRadius: Radius.md,
+    padding: Spacing.xl,
+    borderRadius: Radius.xs,
     borderWidth: 1,
-    padding: Spacing.xxl,
     alignItems: 'center',
     justifyContent: 'center',
+    marginTop: Spacing.sm,
   },
   emptyDayText: {
     fontSize: 13,
-    marginBottom: Spacing.md,
+    marginBottom: Spacing.sm,
   },
   emptyDayAddBtn: {
-    paddingVertical: 8,
+    paddingVertical: 7,
     paddingHorizontal: 14,
-    borderRadius: Radius.sm,
-    borderWidth: 1,
+    borderRadius: Radius.xs,
   },
   emptyDayAddBtnText: {
+    color: '#FFFFFF',
     fontSize: 12,
     fontWeight: '700',
   },
   entryCard: {
-    borderRadius: Radius.md,
-    borderWidth: 1,
     padding: Spacing.md,
+    borderRadius: Radius.xs,
+    borderWidth: 1,
     marginBottom: Spacing.sm,
   },
   entryHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
+    marginBottom: 6,
   },
   entryProjectInfo: {
     flex: 1,
-    paddingRight: Spacing.sm,
   },
   entryProjectName: {
     fontSize: 13,
@@ -581,34 +764,35 @@ const styles = StyleSheet.create({
   },
   entryTaskName: {
     fontSize: 12,
-    marginTop: 2,
+    fontWeight: '600',
+    marginTop: 1,
   },
   entryHoursBadge: {
+    paddingHorizontal: 7,
     paddingVertical: 3,
-    paddingHorizontal: 8,
-    borderRadius: Radius.sm,
+    borderRadius: Radius.xs,
   },
   entryHoursText: {
     fontSize: 12,
-    fontWeight: '700',
+    fontWeight: '800',
   },
   entryNote: {
     fontSize: 12,
-    lineHeight: 17,
-    marginTop: Spacing.sm,
+    lineHeight: 16,
+    marginBottom: 8,
   },
   entryFooter: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginTop: Spacing.md,
-    paddingTop: Spacing.xs + 2,
-    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingTop: 6,
+    borderTopWidth: 1,
   },
   entryClientTag: {
-    fontSize: 11,
+    fontSize: 10,
+    fontWeight: '500',
   },
   deleteBtn: {
-    padding: 4,
+    padding: 2,
   },
 });
