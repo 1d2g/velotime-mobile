@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useMemo, useRef } from 'react';
+import { AppState } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 import { Project, Entry, apiRequest, getLocalDateString } from '../services/api';
@@ -78,6 +79,7 @@ interface TimesheetContextType {
   logManualEntry: (date: string, projectId: string, taskId: string, hours: number, note?: string) => Promise<void>;
   deleteEntry: (entryIdOrIndex: string | number) => Promise<void>;
   submitWeekTimesheet: () => Promise<void>;
+  unlockWeekTimesheet: (submissionId?: string) => Promise<void>;
   goToPrevWeek: () => void;
   goToNextWeek: () => void;
   goToCurrentWeek: () => void;
@@ -257,6 +259,75 @@ export function TimesheetProvider({ children }: { children: React.ReactNode }) {
     };
   }, [activeTimer.isRunning]);
 
+  // Remote live stopwatch sync polling (Mobile <-> Web & Extension)
+  useEffect(() => {
+    if (isDemoMode || !user) return;
+
+    let isMounted = true;
+    const checkRemoteTimer = async () => {
+      try {
+        const remote = await apiRequest('/api/timer/active', 'GET');
+        if (!isMounted || !remote) return;
+
+        if (remote.activeTimerStart && remote.activeTimerTaskId) {
+          // Timer is running on server / desktop
+          const serverStartMs = new Date(remote.activeTimerStart).getTime();
+          const elapsed = Math.max(0, Math.floor((Date.now() - serverStartMs) / 1000));
+
+          setActiveTimer((prev) => {
+            let targetProjectId = prev.projectId;
+            for (const p of projects) {
+              if (p.tasks?.some((t) => t.id === remote.activeTimerTaskId)) {
+                targetProjectId = p.id;
+                break;
+              }
+            }
+
+            if (!prev.isRunning || prev.taskId !== remote.activeTimerTaskId) {
+              return {
+                isRunning: true,
+                projectId: targetProjectId,
+                taskId: remote.activeTimerTaskId,
+                startTime: serverStartMs,
+                elapsedSeconds: elapsed,
+                note: prev.note || '',
+              };
+            }
+            return prev;
+          });
+        } else {
+          // Timer is stopped on server
+          setActiveTimer((prev) => {
+            if (prev.isRunning) {
+              refreshData();
+              return {
+                ...prev,
+                isRunning: false,
+                startTime: null,
+              };
+            }
+            return prev;
+          });
+        }
+      } catch (e) {
+        // network offline, ignore
+      }
+    };
+
+    const interval = setInterval(checkRemoteTimer, 6000);
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        checkRemoteTimer();
+      }
+    });
+
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+      subscription.remove();
+    };
+  }, [isDemoMode, user, projects]);
+
   // Timer Handlers
   const startTimer = (projectId: string, taskId: string, note = '') => {
     try {
@@ -273,6 +344,15 @@ export function TimesheetProvider({ children }: { children: React.ReactNode }) {
     };
     setActiveTimer(updated);
     AsyncStorage.setItem('velotime_active_timer', JSON.stringify(updated)).catch(() => {});
+
+    // Sync live stopwatch to server / web app / extension
+    if (!isDemoMode && user) {
+      apiRequest('/api/timer/toggle', 'POST', {
+        action: 'start',
+        taskId: updated.taskId,
+        dateId: todayStr,
+      }).catch(() => {});
+    }
   };
 
   const pauseTimer = () => {
@@ -287,6 +367,14 @@ export function TimesheetProvider({ children }: { children: React.ReactNode }) {
     };
     setActiveTimer(updated);
     AsyncStorage.setItem('velotime_active_timer', JSON.stringify(updated)).catch(() => {});
+
+    if (!isDemoMode && user) {
+      apiRequest('/api/timer/toggle', 'POST', {
+        action: 'stop',
+        taskId: activeTimer.taskId,
+        dateId: todayStr,
+      }).catch(() => {});
+    }
   };
 
   const resumeTimer = () => {
@@ -301,6 +389,14 @@ export function TimesheetProvider({ children }: { children: React.ReactNode }) {
     };
     setActiveTimer(updated);
     AsyncStorage.setItem('velotime_active_timer', JSON.stringify(updated)).catch(() => {});
+
+    if (!isDemoMode && user) {
+      apiRequest('/api/timer/toggle', 'POST', {
+        action: 'start',
+        taskId: updated.taskId,
+        dateId: todayStr,
+      }).catch(() => {});
+    }
   };
 
   const resetTimer = () => {
@@ -317,6 +413,14 @@ export function TimesheetProvider({ children }: { children: React.ReactNode }) {
     };
     setActiveTimer(updated);
     AsyncStorage.removeItem('velotime_active_timer').catch(() => {});
+
+    if (!isDemoMode && user) {
+      apiRequest('/api/timer/toggle', 'POST', {
+        action: 'stop',
+        taskId: activeTimer.taskId,
+        dateId: todayStr,
+      }).catch(() => {});
+    }
   };
 
   const saveTimer = async (): Promise<Entry | null> => {
@@ -383,6 +487,13 @@ export function TimesheetProvider({ children }: { children: React.ReactNode }) {
   };
 
   const logManualEntry = async (date: string, projectId: string, taskId: string, hours: number, note = '') => {
+    if (submissionStatus === 'approved') {
+      try {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      } catch {}
+      return;
+    }
+
     try {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     } catch {}
@@ -423,6 +534,13 @@ export function TimesheetProvider({ children }: { children: React.ReactNode }) {
   };
 
   const deleteEntry = async (entryIdOrIndex: string | number) => {
+    if (submissionStatus === 'approved') {
+      try {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      } catch {}
+      return;
+    }
+
     try {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     } catch {}
@@ -447,6 +565,26 @@ export function TimesheetProvider({ children }: { children: React.ReactNode }) {
           await apiRequest('/api/timesheet/submit', 'POST', { weekStartDate: weekStartId });
         } catch {}
       }
+    }
+  };
+
+  const unlockWeekTimesheet = async (submissionId?: string) => {
+    try {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch {}
+
+    setSubmissionStatus('draft');
+    await AsyncStorage.setItem('velotime_mobile_submission_status', 'draft');
+
+    if (!isDemoMode && user) {
+      try {
+        if (submissionId) {
+          await apiRequest(`/api/timesheet-submissions/${submissionId}/status`, 'PUT', { status: 'draft' });
+        } else {
+          const weekStartId = weekDates[0]?.id;
+          await apiRequest('/api/timesheet/unlock', 'POST', { weekStartDate: weekStartId });
+        }
+      } catch {}
     }
   };
 
@@ -590,6 +728,7 @@ export function TimesheetProvider({ children }: { children: React.ReactNode }) {
         logManualEntry,
         deleteEntry,
         submitWeekTimesheet,
+        unlockWeekTimesheet,
         goToPrevWeek,
         goToNextWeek,
         goToCurrentWeek,

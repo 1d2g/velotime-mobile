@@ -189,6 +189,7 @@ interface ManagerContextType {
   setReportTimeframe: (tf: ReportTimeframe) => void;
   approveSubmission: (id: string) => Promise<void>;
   rejectSubmission: (id: string, note: string) => Promise<void>;
+  unlockSubmission: (id: string) => Promise<void>;
   updateTeamMemberRates: (memberId: string, costRate: number, billingRate: number) => Promise<void>;
   // Computed Executive Metrics
   metrics: {
@@ -210,6 +211,11 @@ interface ManagerContextType {
     revenue: number;
     budgetHours: number;
     budgetPct: number;
+    riskLevel?: 'safe' | 'warning' | 'critical';
+    alertMessage?: string | null;
+    projectedMonthEndHours?: number;
+    projectedOverrunHours?: number;
+    burnRateDaily?: number;
   }[];
   teamBreakdowns: {
     id: string;
@@ -315,6 +321,24 @@ export function ManagerProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const unlockSubmission = async (id: string) => {
+    try {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch {}
+
+    const updated = submissions.map((s) =>
+      s.id === id ? { ...s, status: 'draft' as const, note: undefined } : s
+    );
+    setSubmissions(updated);
+    await AsyncStorage.setItem('velotime_offline_submissions', JSON.stringify(updated));
+
+    if (!isDemoMode && user) {
+      try {
+        await apiRequest(`/api/timesheet-submissions/${id}/status`, 'PUT', { status: 'draft' });
+      } catch {}
+    }
+  };
+
   const updateTeamMemberRates = async (memberId: string, costRate: number, billingRate: number) => {
     try {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -350,16 +374,36 @@ export function ManagerProvider({ children }: { children: React.ReactNode }) {
     }
   }, [reportTimeframe]);
 
-  // Aggregate project reporting
+  // Aggregate project reporting with predictive retainer pacing telemetry
   const projectBreakdowns = useMemo(() => {
+    const now = new Date();
+    const currentDay = Math.max(1, now.getDate());
+    const totalDaysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    const workdayElapsedRatio = Math.max(0.1, Math.min(1.0, currentDay / totalDaysInMonth));
+
     return projects.map((p, idx) => {
       const baseHours = idx === 0 ? 92.5 : idx === 1 ? 58.0 : 33.5;
       const hours = Math.round(baseHours * timeframeMultiplier * 10) / 10;
       const billableHours = Math.round(hours * 0.92 * 10) / 10;
       const rate = p.hourlyRate || 165;
       const revenue = Math.round(billableHours * rate);
-      const budgetHours = p.budgetHours || (p.budgetLimit ? Math.round(p.budgetLimit / rate) : 180);
+      const budgetHours = p.budgetHours || (p.budgetLimit ? Math.round(p.budgetLimit / rate) : 120);
       const budgetPct = budgetHours > 0 ? Math.min(100, Math.round((hours / budgetHours) * 100)) : 0;
+
+      // Pacing calculations
+      const projectedMonthEndHours = Math.round((hours / workdayElapsedRatio) * 10) / 10;
+      const projectedOverrunHours = Math.max(0, Math.round((projectedMonthEndHours - budgetHours) * 10) / 10);
+      const burnRateDaily = Math.round((hours / currentDay) * 10) / 10;
+
+      let riskLevel: 'safe' | 'warning' | 'critical' = 'safe';
+      let alertMessage: string | null = null;
+      if (budgetPct >= 95 || (budgetPct >= 85 && projectedOverrunHours > 0)) {
+        riskLevel = 'critical';
+        alertMessage = `Critical Retainer Overrun: Burn rate ${burnRateDaily}h/day projects +${projectedOverrunHours}h over budget by month-end.`;
+      } else if (budgetPct >= 80 || (budgetPct >= 65 && projectedMonthEndHours > budgetHours)) {
+        riskLevel = 'warning';
+        alertMessage = `80%+ Retainer Burn Warning: Pacing projects ${projectedMonthEndHours}h by month-end against ${budgetHours}h budget.`;
+      }
 
       return {
         id: p.id,
@@ -370,6 +414,11 @@ export function ManagerProvider({ children }: { children: React.ReactNode }) {
         revenue,
         budgetHours,
         budgetPct,
+        riskLevel,
+        alertMessage,
+        projectedMonthEndHours,
+        projectedOverrunHours,
+        burnRateDaily,
       };
     });
   }, [projects, timeframeMultiplier]);
@@ -452,6 +501,7 @@ export function ManagerProvider({ children }: { children: React.ReactNode }) {
         setReportTimeframe,
         approveSubmission,
         rejectSubmission,
+        unlockSubmission,
         updateTeamMemberRates,
         metrics,
         projectBreakdowns,

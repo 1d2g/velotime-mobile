@@ -18,6 +18,8 @@ import {
   ChevronRight,
   Check,
   AlertTriangle,
+  Lock,
+  Unlock,
 } from 'lucide-react-native';
 import { useAuth } from '@/src/context/AuthContext';
 import { useTimesheet } from '@/src/context/TimesheetContext';
@@ -117,12 +119,28 @@ export default function WeekScreen() {
     );
   };
 
+  const isApprovedLocked = submissionStatus === 'approved';
+
   const handleOpenAddForDay = (dateStr: string) => {
+    if (isApprovedLocked) {
+      Alert.alert(
+        'Timesheet Approved & Locked',
+        'This timesheet has already been approved by your manager and locked from further edits. Contact your manager if an adjustment is required.'
+      );
+      return;
+    }
     setTargetDateForEntry(dateStr);
     setManualModalVisible(true);
   };
 
   const handleDeleteEntry = (entryId: string, projectName: string, hours: number) => {
+    if (isApprovedLocked) {
+      Alert.alert(
+        'Timesheet Approved & Locked',
+        'This timesheet is locked from deletion. Contact your manager if changes are needed.'
+      );
+      return;
+    }
     Alert.alert(
       'Delete Time Entry',
       `Delete ${hours} hrs logged for "${projectName}"?`,
@@ -218,7 +236,7 @@ export default function WeekScreen() {
         >
           <View style={styles.statusBannerLeft}>
             {submissionStatus === 'approved' ? (
-              <Check color="#10B981" size={16} strokeWidth={2.5} style={{ marginRight: 6 }} />
+              <Lock color="#10B981" size={16} strokeWidth={2.5} style={{ marginRight: 6 }} />
             ) : submissionStatus === 'submitted' ? (
               <Clock color={colors.primary} size={16} strokeWidth={2.2} style={{ marginRight: 6 }} />
             ) : submissionStatus === 'rejected' ? (
@@ -243,12 +261,21 @@ export default function WeekScreen() {
                 ]}
               >
                 {submissionStatus === 'approved'
-                  ? 'Timesheet Approved by Manager'
+                  ? 'Timesheet Approved & Locked'
                   : submissionStatus === 'submitted'
                   ? 'Submitted • Awaiting Manager Approval'
                   : submissionStatus === 'rejected'
                   ? 'Returned for Revision'
                   : 'Weekly Timesheet Draft'}
+              </Text>
+              <Text style={{ fontSize: 11, color: colors.textMuted, marginTop: 1 }}>
+                {submissionStatus === 'approved'
+                  ? 'Locked from employee edits. Contact your manager to reopen.'
+                  : submissionStatus === 'submitted'
+                  ? 'Locked while pending manager review.'
+                  : submissionStatus === 'rejected'
+                  ? 'Returned for revision. Please review notes and resubmit.'
+                  : 'Draft entries are editable until submitted.'}
               </Text>
               {submissionRejectNote && submissionStatus === 'rejected' && (
                 <Text style={[styles.statusRejectNote, { color: '#E11D48' }]}>
@@ -418,7 +445,10 @@ export default function WeekScreen() {
           </View>
 
           <TouchableOpacity
-            style={[styles.addTimeBtn, { backgroundColor: colors.primary }]}
+            style={[
+              styles.addTimeBtn,
+              { backgroundColor: isApprovedLocked ? colors.surfaceSubtle : colors.primary },
+            ]}
             onPress={() =>
               handleOpenAddForDay(
                 viewMode === 'day'
@@ -430,8 +460,17 @@ export default function WeekScreen() {
             }
             activeOpacity={0.8}
           >
-            <Plus color="#FFFFFF" size={15} strokeWidth={2.5} style={{ marginRight: 4 }} />
-            <Text style={styles.addTimeBtnText}>Add Time</Text>
+            {isApprovedLocked ? (
+              <>
+                <Lock color={colors.textDim} size={13} strokeWidth={2.5} style={{ marginRight: 4 }} />
+                <Text style={[styles.addTimeBtnText, { color: colors.textMuted }]}>Locked</Text>
+              </>
+            ) : (
+              <>
+                <Plus color="#FFFFFF" size={15} strokeWidth={2.5} style={{ marginRight: 4 }} />
+                <Text style={styles.addTimeBtnText}>Add Time</Text>
+              </>
+            )}
           </TouchableOpacity>
         </View>
 
@@ -480,15 +519,21 @@ export default function WeekScreen() {
                   {entry.isBillable !== false ? ' · Billable' : ''}
                 </Text>
 
-                <TouchableOpacity
-                  style={styles.deleteBtn}
-                  onPress={() =>
-                    handleDeleteEntry(entry.id || String(idx), entry.projectName || 'Project', entry.hours)
-                  }
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                >
-                  <Trash2 color={colors.textDim} size={15} />
-                </TouchableOpacity>
+                {isApprovedLocked ? (
+                  <View style={styles.deleteBtn}>
+                    <Lock color={colors.textDim} size={13} strokeWidth={2} />
+                  </View>
+                ) : (
+                  <TouchableOpacity
+                    style={styles.deleteBtn}
+                    onPress={() =>
+                      handleDeleteEntry(entry.id || String(idx), entry.projectName || 'Project', entry.hours)
+                    }
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <Trash2 color={colors.textDim} size={15} />
+                  </TouchableOpacity>
+                )}
               </View>
             </View>
           ))

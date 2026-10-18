@@ -84,7 +84,7 @@ export interface TimesheetSubmission {
   weekStartDate: string; // YYYY-MM-DD
   totalHours: number;
   billableHours: number;
-  status: 'submitted' | 'approved' | 'rejected';
+  status: 'draft' | 'submitted' | 'approved' | 'rejected';
   submittedAt: string;
   note?: string;
   breakdown?: SubmissionBreakdownItem[];

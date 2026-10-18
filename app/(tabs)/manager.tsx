@@ -31,6 +31,9 @@ import {
   CreditCard,
   Edit3,
   Percent,
+  Unlock,
+  AlertTriangle,
+  AlertOctagon,
 } from 'lucide-react-native';
 import { useManager, ReportTimeframe } from '@/src/context/ManagerContext';
 import { useAuth } from '@/src/context/AuthContext';
@@ -53,6 +56,7 @@ export default function ManagerScreen() {
     setReportTimeframe,
     approveSubmission,
     rejectSubmission,
+    unlockSubmission,
     updateTeamMemberRates,
     metrics,
     projectBreakdowns,
@@ -555,23 +559,62 @@ export default function ManagerScreen() {
                     </Text>
                   )}
                 </View>
-                <View
-                  style={[
-                    styles.statusBadge,
-                    {
-                      backgroundColor: sub.status === 'approved' ? '#10B98120' : '#E11D4820',
-                      borderColor: sub.status === 'approved' ? '#10B98150' : '#E11D4850',
-                    },
-                  ]}
-                >
-                  <Text
+                <View style={{ alignItems: 'flex-end', gap: 6 }}>
+                  <View
                     style={[
-                      styles.statusBadgeText,
-                      { color: sub.status === 'approved' ? '#059669' : '#E11D48' },
+                      styles.statusBadge,
+                      {
+                        backgroundColor: sub.status === 'approved' ? '#10B98120' : '#E11D4820',
+                        borderColor: sub.status === 'approved' ? '#10B98150' : '#E11D4850',
+                      },
                     ]}
                   >
-                    {sub.status === 'approved' ? 'Approved' : 'Rejected'}
-                  </Text>
+                    <Text
+                      style={[
+                        styles.statusBadgeText,
+                        { color: sub.status === 'approved' ? '#059669' : '#E11D48' },
+                      ]}
+                    >
+                      {sub.status === 'approved' ? 'Approved' : 'Rejected'}
+                    </Text>
+                  </View>
+
+                  {sub.status === 'approved' && (
+                    <TouchableOpacity
+                      onPress={() => {
+                        Alert.alert(
+                          'Unlock Timesheet',
+                          `Unlock ${sub.userName}'s timesheet for week of ${sub.weekStartDate}? This will reopen it for employee edits.`,
+                          [
+                            { text: 'Cancel', style: 'cancel' },
+                            {
+                              text: 'Unlock Timesheet',
+                              onPress: async () => {
+                                await unlockSubmission(sub.id);
+                                Alert.alert('Timesheet Unlocked', 'Timesheet has been returned to draft status.');
+                              },
+                            },
+                          ]
+                        );
+                      }}
+                      style={{
+                        paddingHorizontal: 8,
+                        paddingVertical: 4,
+                        borderWidth: 1,
+                        borderColor: colors.borderSubtle,
+                        backgroundColor: colors.surfaceSubtle,
+                        borderRadius: 2,
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        gap: 4,
+                      }}
+                    >
+                      <Unlock size={11} color={colors.textMuted} />
+                      <Text style={{ fontSize: 10, fontWeight: '700', color: colors.textMuted }}>
+                        Unlock
+                      </Text>
+                    </TouchableOpacity>
+                  )}
                 </View>
               </View>
             ))}
@@ -682,6 +725,36 @@ export default function ManagerScreen() {
                     ]}
                   />
                 </View>
+                {Boolean(proj.alertMessage) && (
+                  <View
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: 6,
+                      marginTop: 8,
+                      padding: 6,
+                      backgroundColor: proj.riskLevel === 'critical' ? '#E11D4818' : '#F59E0B18',
+                      borderColor: proj.riskLevel === 'critical' ? '#E11D4840' : '#F59E0B40',
+                      borderWidth: 1,
+                    }}
+                  >
+                    {proj.riskLevel === 'critical' ? (
+                      <AlertOctagon size={13} color="#E11D48" />
+                    ) : (
+                      <AlertTriangle size={13} color="#D97706" />
+                    )}
+                    <Text
+                      style={{
+                        flex: 1,
+                        fontSize: 10,
+                        fontWeight: '600',
+                        color: proj.riskLevel === 'critical' ? '#E11D48' : '#B45309',
+                      }}
+                    >
+                      {proj.alertMessage}
+                    </Text>
+                  </View>
+                )}
               </View>
             ))}
 
