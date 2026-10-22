@@ -12,7 +12,8 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.dgtools.velotime",
       "infoPlist": {
-        "NSFaceIDUsageDescription": "Allow VeloTime to quickly unlock your timesheet."
+        "NSFaceIDUsageDescription": "Allow VeloTime to quickly unlock your timesheet.",
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
@@ -47,6 +48,12 @@
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "e6369caf-8659-4e01-a12c-735d59b6bdf7"
+      }
     }
   }
 }
