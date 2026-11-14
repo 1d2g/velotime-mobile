@@ -10,6 +10,7 @@ import { AuthProvider } from '@/src/context/AuthContext';
 import { TimesheetProvider } from '@/src/context/TimesheetContext';
 import { ExpenseProvider } from '@/src/context/ExpenseContext';
 import { ManagerProvider } from '@/src/context/ManagerContext';
+import { AuthModal } from '@/src/components/AuthModal';
 
 export {
   ErrorBoundary,
@@ -98,6 +99,7 @@ function RootLayoutNav() {
           }}
         />
       </Stack>
+      <AuthModal />
     </NavThemeProvider>
   );
 }

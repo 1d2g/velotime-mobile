@@ -1,11 +1,19 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { useColorScheme as useDeviceColorScheme } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { ThemeColors, ThemeMode, darkTheme, lightTheme } from '../constants/theme';
+import {
+  ThemeColors,
+  ThemeMode,
+  AccentTheme,
+  darkTheme,
+  getThemedColors,
+} from '../constants/theme';
 
 interface ThemeContextType {
   mode: ThemeMode;
   setMode: (mode: ThemeMode) => Promise<void>;
+  accent: AccentTheme;
+  setAccent: (accent: AccentTheme) => Promise<void>;
   colors: ThemeColors;
   isDark: boolean;
 }
@@ -13,18 +21,31 @@ interface ThemeContextType {
 const ThemeContext = createContext<ThemeContextType | null>(null);
 
 const STORAGE_KEY = 'velotime_app_theme_mode';
+const ACCENT_STORAGE_KEY = '@velotime_accent_theme';
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const deviceColorScheme = useDeviceColorScheme();
   const [mode, setModeState] = useState<ThemeMode>('dark');
+  const [accent, setAccentState] = useState<AccentTheme>('rose');
   const [isLoaded, setIsLoaded] = useState(false);
 
   useEffect(() => {
     async function loadTheme() {
       try {
-        const saved = await AsyncStorage.getItem(STORAGE_KEY);
-        if (saved === 'dark' || saved === 'light' || saved === 'system') {
-          setModeState(saved);
+        const [savedMode, savedAccent] = await Promise.all([
+          AsyncStorage.getItem(STORAGE_KEY),
+          AsyncStorage.getItem(ACCENT_STORAGE_KEY),
+        ]);
+        if (savedMode === 'dark' || savedMode === 'light' || savedMode === 'system') {
+          setModeState(savedMode);
+        }
+        if (
+          savedAccent === 'rose' ||
+          savedAccent === 'blue' ||
+          savedAccent === 'violet' ||
+          savedAccent === 'amber'
+        ) {
+          setAccentState(savedAccent);
         }
       } catch {}
       setIsLoaded(true);
@@ -37,6 +58,11 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     await AsyncStorage.setItem(STORAGE_KEY, newMode).catch(() => {});
   };
 
+  const setAccent = async (newAccent: AccentTheme) => {
+    setAccentState(newAccent);
+    await AsyncStorage.setItem(ACCENT_STORAGE_KEY, newAccent).catch(() => {});
+  };
+
   const isDark =
     mode === 'dark'
       ? true
@@ -44,10 +70,10 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       ? false
       : deviceColorScheme === 'dark';
 
-  const colors = isDark ? darkTheme : lightTheme;
+  const colors = getThemedColors(isDark, accent);
 
   return (
-    <ThemeContext.Provider value={{ mode, setMode, colors, isDark }}>
+    <ThemeContext.Provider value={{ mode, setMode, accent, setAccent, colors, isDark }}>
       {children}
     </ThemeContext.Provider>
   );
@@ -59,6 +85,8 @@ export function useTheme() {
     return {
       mode: 'dark' as ThemeMode,
       setMode: async () => {},
+      accent: 'rose' as AccentTheme,
+      setAccent: async () => {},
       colors: darkTheme,
       isDark: true,
     };

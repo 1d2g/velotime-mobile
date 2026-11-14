@@ -1,4 +1,79 @@
 export type ThemeMode = 'dark' | 'light' | 'system';
+export type AccentTheme = 'rose' | 'blue' | 'violet' | 'amber';
+
+export interface AccentPalette {
+  label: string;
+  swatch: string;
+  darkPrimary: string;
+  darkHover: string;
+  darkMuted: string;
+  darkText: string;
+  darkHighlight: string;
+  lightPrimary: string;
+  lightHover: string;
+  lightMuted: string;
+  lightText: string;
+  lightHighlight: string;
+}
+
+export const ACCENT_PALETTES: Record<AccentTheme, AccentPalette> = {
+  rose: {
+    label: 'VeloTime Rose',
+    swatch: '#F43F5E',
+    darkPrimary: '#F43F5E',
+    darkHover: '#E11D48',
+    darkMuted: 'rgba(244, 63, 94, 0.16)',
+    darkText: '#FDA4AF',
+    darkHighlight: 'rgba(244, 63, 94, 0.12)',
+    lightPrimary: '#E11D48',
+    lightHover: '#BE123C',
+    lightMuted: '#FFF1F2',
+    lightText: '#9F1239',
+    lightHighlight: '#FFF1F2',
+  },
+  blue: {
+    label: 'Cobalt Blue',
+    swatch: '#3B82F6',
+    darkPrimary: '#3B82F6',
+    darkHover: '#2563EB',
+    darkMuted: 'rgba(59, 130, 246, 0.16)',
+    darkText: '#93C5FD',
+    darkHighlight: 'rgba(59, 130, 246, 0.12)',
+    lightPrimary: '#2563EB',
+    lightHover: '#1D4ED8',
+    lightMuted: '#EFF6FF',
+    lightText: '#1E40AF',
+    lightHighlight: '#EFF6FF',
+  },
+  violet: {
+    label: 'Electric Violet',
+    swatch: '#8B5CF6',
+    darkPrimary: '#8B5CF6',
+    darkHover: '#7C3AED',
+    darkMuted: 'rgba(139, 92, 246, 0.16)',
+    darkText: '#C4B5FD',
+    darkHighlight: 'rgba(139, 92, 246, 0.12)',
+    lightPrimary: '#7C3AED',
+    lightHover: '#6D28D9',
+    lightMuted: '#F5F3FF',
+    lightText: '#5B21B6',
+    lightHighlight: '#F5F3FF',
+  },
+  amber: {
+    label: 'Solar Amber',
+    swatch: '#F59E0B',
+    darkPrimary: '#F59E0B',
+    darkHover: '#D97706',
+    darkMuted: 'rgba(245, 158, 11, 0.16)',
+    darkText: '#FCD34D',
+    darkHighlight: 'rgba(245, 158, 11, 0.12)',
+    lightPrimary: '#D97706',
+    lightHover: '#B45309',
+    lightMuted: '#FFFBEB',
+    lightText: '#92400E',
+    lightHighlight: '#FFFBEB',
+  },
+};
 
 export interface ThemeColors {
   isDark: boolean;
@@ -71,6 +146,19 @@ export const lightTheme: ThemeColors = {
 
 // Default fallback export
 export const Colors = darkTheme;
+
+export function getThemedColors(isDark: boolean, accent: AccentTheme = 'rose'): ThemeColors {
+  const base = isDark ? darkTheme : lightTheme;
+  const palette = ACCENT_PALETTES[accent] || ACCENT_PALETTES.rose;
+  return {
+    ...base,
+    primary: isDark ? palette.darkPrimary : palette.lightPrimary,
+    primaryHover: isDark ? palette.darkHover : palette.lightHover,
+    primaryMuted: isDark ? palette.darkMuted : palette.lightMuted,
+    primaryText: isDark ? palette.darkText : palette.lightText,
+    cardHighlight: isDark ? palette.darkHighlight : palette.lightHighlight,
+  };
+}
 
 export const Spacing = {
   xs: 4,

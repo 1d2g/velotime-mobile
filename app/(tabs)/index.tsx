@@ -22,6 +22,7 @@ import {
   ChevronRight,
   Wifi,
   WifiOff,
+  Edit3,
 } from 'lucide-react-native';
 import { useAuth } from '@/src/context/AuthContext';
 import { useTimesheet } from '@/src/context/TimesheetContext';
@@ -29,9 +30,10 @@ import { useTheme } from '@/src/context/ThemeContext';
 import { Spacing, Radius } from '@/src/constants/theme';
 import { ProjectPickerModal } from '@/src/components/ProjectPickerModal';
 import { ManualEntryModal } from '@/src/components/ManualEntryModal';
+import { Entry } from '@/src/services/api';
 
 export default function TimerScreen() {
-  const { colors, isDark } = useTheme();
+  const { colors } = useTheme();
   const { user, isDemoMode, syncStatus } = useAuth();
   const {
     projects,
@@ -46,11 +48,13 @@ export default function TimerScreen() {
     setTimerNote,
     setTimerProjectAndTask,
     logManualEntry,
+    updateEntry,
     deleteEntry,
   } = useTimesheet();
 
   const [projectPickerVisible, setProjectPickerVisible] = useState(false);
   const [manualModalVisible, setManualModalVisible] = useState(false);
+  const [editingEntry, setEditingEntry] = useState<Entry | null>(null);
 
   const currentProject =
     projects.find((p) => p.id === activeTimer.projectId) || projects[0] || { name: 'Select Project', tasks: [] };
@@ -278,7 +282,10 @@ export default function TimerScreen() {
         {/* Quick Manual Entry Strip */}
         <TouchableOpacity
           style={[styles.manualEntryBtn, { backgroundColor: colors.surface, borderColor: colors.borderSubtle }]}
-          onPress={() => setManualModalVisible(true)}
+          onPress={() => {
+            setEditingEntry(null);
+            setManualModalVisible(true);
+          }}
           activeOpacity={0.7}
         >
           <View style={styles.manualBtnLeft}>
@@ -314,8 +321,13 @@ export default function TimerScreen() {
           </View>
         ) : (
           todayEntries.map((entry, idx) => (
-            <View
+            <TouchableOpacity
               key={entry.id || idx}
+              activeOpacity={0.75}
+              onPress={() => {
+                setEditingEntry(entry);
+                setManualModalVisible(true);
+              }}
               style={[styles.entryCard, { backgroundColor: colors.surface, borderColor: colors.borderSubtle }]}
             >
               <View style={styles.entryHeader}>
@@ -338,17 +350,20 @@ export default function TimerScreen() {
                   {entry.isBillable !== false ? ' · Billable' : ''}
                 </Text>
 
-                <TouchableOpacity
-                  style={styles.deleteBtn}
-                  onPress={() =>
-                    handleDeleteEntry(entry.id || String(idx), entry.projectName || 'Project', entry.hours)
-                  }
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                >
-                  <Trash2 color={colors.textDim} size={15} />
-                </TouchableOpacity>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                  <Edit3 color={colors.textDim} size={14} />
+                  <TouchableOpacity
+                    style={styles.deleteBtn}
+                    onPress={() =>
+                      handleDeleteEntry(entry.id || String(idx), entry.projectName || 'Project', entry.hours)
+                    }
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <Trash2 color={colors.textDim} size={15} />
+                  </TouchableOpacity>
+                </View>
               </View>
-            </View>
+            </TouchableOpacity>
           ))
         )}
       </ScrollView>
@@ -363,13 +378,26 @@ export default function TimerScreen() {
         onSelect={(pId, tId) => setTimerProjectAndTask(pId, tId)}
       />
 
-      {/* Manual Entry Modal */}
+      {/* Manual Entry / Edit Entry Modal */}
       <ManualEntryModal
         visible={manualModalVisible}
-        onClose={() => setManualModalVisible(false)}
+        onClose={() => {
+          setManualModalVisible(false);
+          setEditingEntry(null);
+        }}
         projects={projects}
-        onSave={async (d, p, t, h, n) => {
-          await logManualEntry(d, p, t, h, n);
+        initialEntry={editingEntry}
+        onDeleteEntry={async (id) => {
+          await deleteEntry(id);
+          setEditingEntry(null);
+        }}
+        onSave={async (d, p, t, h, n, existingId) => {
+          if (existingId) {
+            await updateEntry(existingId, { date: d, projectId: p, taskId: t, hours: h, note: n });
+          } else {
+            await logManualEntry(d, p, t, h, n);
+          }
+          setEditingEntry(null);
         }}
       />
     </SafeAreaView>

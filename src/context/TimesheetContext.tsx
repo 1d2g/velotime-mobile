@@ -77,7 +77,10 @@ interface TimesheetContextType {
   setTimerNote: (note: string) => void;
   setTimerProjectAndTask: (projectId: string, taskId: string) => void;
   logManualEntry: (date: string, projectId: string, taskId: string, hours: number, note?: string) => Promise<void>;
+  updateEntry: (entryId: string, updates: { date?: string; projectId?: string; taskId?: string; hours?: number; note?: string }) => Promise<void>;
   deleteEntry: (entryIdOrIndex: string | number) => Promise<void>;
+  selectedEmployeeName: string;
+  setSelectedEmployeeName: (name: string) => void;
   submitWeekTimesheet: () => Promise<void>;
   unlockWeekTimesheet: (submissionId?: string) => Promise<void>;
   goToPrevWeek: () => void;
@@ -92,22 +95,34 @@ interface TimesheetContextType {
     budgetType?: string;
     tasks: Array<{ name: string; hourlyRate?: number; isBillable?: boolean; budgetHours?: number }>;
   }) => Promise<void>;
+  editProject: (
+    projectId: string,
+    updates: Partial<Pick<Project, 'name' | 'clientName' | 'hourlyRate' | 'budget' | 'budgetHours' | 'budgetType' | 'isBillable'>>
+  ) => Promise<void>;
+  deleteProject: (projectId: string) => Promise<void>;
   addTaskToProject: (
     projectId: string,
     task: { name: string; hourlyRate?: number; isBillable?: boolean; budgetHours?: number }
   ) => Promise<void>;
+  editTask: (
+    projectId: string,
+    taskId: string,
+    updates: { name?: string; hourlyRate?: number; isBillable?: boolean; budgetHours?: number }
+  ) => Promise<void>;
+  deleteTask: (projectId: string, taskId: string) => Promise<void>;
   refreshData: () => Promise<void>;
 }
 
 const TimesheetContext = createContext<TimesheetContextType | null>(null);
 
 export function TimesheetProvider({ children }: { children: React.ReactNode }) {
-  const { user, isDemoMode, setSyncStatus } = useAuth();
+  const { user, token, isDemoMode, setSyncStatus, orgSettings } = useAuth();
   const [projects, setProjects] = useState<Project[]>(INITIAL_MOBILE_PROJECTS);
   const [entries, setEntries] = useState<Entry[]>([]);
   const [weekOffset, setWeekOffset] = useState<number>(0);
   const [submissionStatus, setSubmissionStatus] = useState<'draft' | 'submitted' | 'approved' | 'rejected'>('draft');
   const [submissionRejectNote, setSubmissionRejectNote] = useState<string | undefined>();
+  const [selectedEmployeeName, setSelectedEmployeeName] = useState<string>('My Timesheet');
   
   // Stopwatch State
   const [activeTimer, setActiveTimer] = useState<ActiveTimer>({
@@ -186,6 +201,13 @@ export function TimesheetProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     async function init() {
       try {
+        const storedProjects = await AsyncStorage.getItem('velotime_offline_projects');
+        if (storedProjects) {
+          const parsedProjects = JSON.parse(storedProjects);
+          if (Array.isArray(parsedProjects) && parsedProjects.length > 0) {
+            setProjects(parsedProjects);
+          }
+        }
         const storedEntries = await AsyncStorage.getItem('velotime_mobile_entries');
         if (storedEntries) {
           setEntries(JSON.parse(storedEntries));
@@ -433,7 +455,11 @@ export function TimesheetProvider({ children }: { children: React.ReactNode }) {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch {}
 
-    const rawHours = activeTimer.elapsedSeconds / 3600;
+    const rawMinutes = activeTimer.elapsedSeconds / 60;
+    const rounding = orgSettings.timerRoundingMinutes || 0;
+    const adjustedMinutes =
+      rounding > 0 ? Math.ceil(rawMinutes / rounding) * rounding : rawMinutes;
+    const rawHours = adjustedMinutes / 60;
     // Round to standard 2 decimal places (minimum 0.05 hr = 3 mins)
     const hours = Math.max(0.05, Math.round(rawHours * 100) / 100);
 
@@ -443,6 +469,7 @@ export function TimesheetProvider({ children }: { children: React.ReactNode }) {
     const newEntry: Entry = {
       id: 'e_' + Date.now(),
       date: todayStr,
+      projectId: project.id,
       taskId: task.id,
       hours,
       note: activeTimer.note.trim() || 'Logged via VeloTime Mobile Stopwatch',
@@ -504,6 +531,7 @@ export function TimesheetProvider({ children }: { children: React.ReactNode }) {
     const newEntry: Entry = {
       id: 'e_' + Date.now(),
       date,
+      projectId: project.id,
       taskId: task.id,
       hours: Math.round(hours * 100) / 100,
       note: note.trim() || 'Manual mobile log',
@@ -520,8 +548,10 @@ export function TimesheetProvider({ children }: { children: React.ReactNode }) {
     if (!isDemoMode && user) {
       try {
         setSyncStatus('syncing');
-        await apiRequest('/api/entries', 'POST', {
+        const endpoint = token?.startsWith('vt_live_') ? '/api/v1/entries' : '/api/entries';
+        await apiRequest(endpoint, 'POST', {
           dateId: date,
+          date,
           taskId: task.id,
           hours: newEntry.hours,
           note: newEntry.note,
@@ -531,6 +561,48 @@ export function TimesheetProvider({ children }: { children: React.ReactNode }) {
         setSyncStatus('offline');
       }
     }
+  };
+
+  const updateEntry = async (
+    entryId: string,
+    updates: { date?: string; projectId?: string; taskId?: string; hours?: number; note?: string }
+  ) => {
+    if (submissionStatus === 'approved') {
+      try {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      } catch {}
+      return;
+    }
+
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    } catch {}
+
+    const targetProject =
+      (updates.projectId ? projects.find((p) => p.id === updates.projectId) : undefined) || projects[0];
+    const targetTask =
+      (updates.taskId && targetProject
+        ? targetProject.tasks.find((t) => t.id === updates.taskId)
+        : undefined) || targetProject?.tasks[0];
+
+    const updatedList = entries.map((e) => {
+      if (e.id !== entryId) return e;
+      return {
+        ...e,
+        date: updates.date ?? e.date,
+        projectId: targetProject?.id ?? e.projectId,
+        projectName: targetProject?.name ?? e.projectName,
+        clientName: targetProject?.clientName ?? e.clientName,
+        taskId: targetTask?.id ?? e.taskId,
+        taskName: targetTask?.name ?? e.taskName,
+        isBillable: targetTask ? targetTask.isBillable !== false : e.isBillable,
+        hours: updates.hours !== undefined ? Math.round(updates.hours * 100) / 100 : e.hours,
+        note: updates.note !== undefined ? updates.note : e.note,
+      };
+    });
+
+    setEntries(updatedList);
+    await AsyncStorage.setItem('velotime_mobile_entries', JSON.stringify(updatedList));
   };
 
   const deleteEntry = async (entryIdOrIndex: string | number) => {
@@ -669,13 +741,85 @@ export function TimesheetProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const editProject = async (
+    projectId: string,
+    updates: Partial<Pick<Project, 'name' | 'clientName' | 'hourlyRate' | 'budget' | 'budgetHours' | 'budgetType' | 'isBillable'>>
+  ) => {
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    } catch {}
+    const updated = projects.map((p) => (p.id === projectId ? { ...p, ...updates } : p));
+    setProjects(updated);
+    await AsyncStorage.setItem('velotime_offline_projects', JSON.stringify(updated));
+  };
+
+  const deleteProject = async (projectId: string) => {
+    try {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    } catch {}
+    const updated = projects.filter((p) => p.id !== projectId);
+    setProjects(updated);
+    await AsyncStorage.setItem('velotime_offline_projects', JSON.stringify(updated));
+  };
+
+  const editTask = async (
+    projectId: string,
+    taskId: string,
+    updates: { name?: string; hourlyRate?: number; isBillable?: boolean; budgetHours?: number }
+  ) => {
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    } catch {}
+    const updated = projects.map((p) => {
+      if (p.id !== projectId) return p;
+      return {
+        ...p,
+        tasks: p.tasks.map((t) => (t.id === taskId ? { ...t, ...updates } : t)),
+      };
+    });
+    setProjects(updated);
+    await AsyncStorage.setItem('velotime_offline_projects', JSON.stringify(updated));
+  };
+
+  const deleteTask = async (projectId: string, taskId: string) => {
+    try {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    } catch {}
+    const updated = projects.map((p) => {
+      if (p.id !== projectId) return p;
+      return {
+        ...p,
+        tasks: p.tasks.filter((t) => t.id !== taskId),
+      };
+    });
+    setProjects(updated);
+    await AsyncStorage.setItem('velotime_offline_projects', JSON.stringify(updated));
+  };
+
   const refreshData = async () => {
-    if (isDemoMode) return;
+    if (isDemoMode || !user) return;
     try {
       setSyncStatus('syncing');
-      const remoteProjects = await apiRequest('/api/projects');
-      if (Array.isArray(remoteProjects)) {
-        setProjects(remoteProjects);
+      if (token?.startsWith('vt_live_')) {
+        const [projRes, entryRes] = await Promise.all([
+          apiRequest('/api/v1/projects').catch(() => null),
+          apiRequest('/api/v1/entries').catch(() => null),
+        ]);
+        const remoteProjects = projRes?.projects || (Array.isArray(projRes) ? projRes : null);
+        if (Array.isArray(remoteProjects) && remoteProjects.length > 0) {
+          setProjects(remoteProjects);
+          await AsyncStorage.setItem('velotime_offline_projects', JSON.stringify(remoteProjects));
+        }
+        const remoteEntries = entryRes?.entries || (Array.isArray(entryRes) ? entryRes : null);
+        if (Array.isArray(remoteEntries) && remoteEntries.length > 0) {
+          setEntries(remoteEntries);
+          await AsyncStorage.setItem('velotime_mobile_entries', JSON.stringify(remoteEntries));
+        }
+      } else {
+        const remoteProjects = await apiRequest('/api/projects');
+        if (Array.isArray(remoteProjects)) {
+          setProjects(remoteProjects);
+        }
       }
       setSyncStatus('synced');
     } catch {
@@ -726,14 +870,21 @@ export function TimesheetProvider({ children }: { children: React.ReactNode }) {
         setTimerNote,
         setTimerProjectAndTask,
         logManualEntry,
+        updateEntry,
         deleteEntry,
+        selectedEmployeeName,
+        setSelectedEmployeeName,
         submitWeekTimesheet,
         unlockWeekTimesheet,
         goToPrevWeek,
         goToNextWeek,
         goToCurrentWeek,
         addProject,
+        editProject,
+        deleteProject,
         addTaskToProject,
+        editTask,
+        deleteTask,
         refreshData,
       }}
     >

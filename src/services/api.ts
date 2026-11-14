@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as SecureStore from 'expo-secure-store';
 
 export const API_BASE = 'https://time-production-b6d9.up.railway.app';
 
@@ -39,6 +40,7 @@ export interface Project {
   budgetLimit?: number;
   budgetType?: string;
   budgetHours?: number;
+  isBillable?: boolean;
   tasks: Task[];
 }
 
@@ -46,7 +48,9 @@ export interface Entry {
   id?: string;
   date: string; // YYYY-MM-DD
   taskId: string;
+  projectId?: string;
   userId?: string;
+  userName?: string;
   hours: number;
   note?: string;
   projectName?: string;
@@ -60,6 +64,7 @@ export interface Expense {
   amount: number;
   description: string;
   category: string;
+  merchant?: string;
   date: string; // YYYY-MM-DD
   projectId: string;
   projectName?: string;
@@ -102,6 +107,13 @@ export interface TeamMember {
   weeklyLoggedHours?: number;
 }
 
+export interface InvoiceLineItem {
+  description: string;
+  hours?: number;
+  rate?: number;
+  amount: number;
+}
+
 export interface Invoice {
   id: string;
   invoiceNumber: string;
@@ -112,7 +124,17 @@ export interface Invoice {
   issueDate: string;
   dueDate: string;
   totalHours?: number;
+  billingMode?: 'hourly' | 'progress' | 'expense' | 'flat';
+  taxRate?: number;
+  notes?: string;
+  auditHash?: string;
+  lineItems?: InvoiceLineItem[];
 }
+
+export const SECURE_STORAGE_KEYS = {
+  TOKEN: 'velotime_secure_token',
+  USER: 'velotime_secure_user',
+};
 
 const STORAGE_KEYS = {
   TOKEN: 'velotime_auth_token',
@@ -126,7 +148,41 @@ const STORAGE_KEYS = {
   PENDING_SYNC: 'velotime_pending_sync_queue',
 };
 
+export async function getSecureValue(key: string): Promise<string | null> {
+  try {
+    const val = await SecureStore.getItemAsync(key);
+    if (val !== null) return val;
+  } catch {}
+  try {
+    return await AsyncStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+export async function setSecureValue(key: string, value: string | null): Promise<void> {
+  if (value === null) {
+    try {
+      await SecureStore.deleteItemAsync(key);
+    } catch {}
+    try {
+      await AsyncStorage.removeItem(key);
+    } catch {}
+    return;
+  }
+  try {
+    await SecureStore.setItemAsync(key, value, {
+      keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+    });
+  } catch {}
+  try {
+    await AsyncStorage.setItem(key, value);
+  } catch {}
+}
+
 export async function getStoredToken(): Promise<string | null> {
+  const secure = await getSecureValue(SECURE_STORAGE_KEYS.TOKEN);
+  if (secure) return secure;
   try {
     return await AsyncStorage.getItem(STORAGE_KEYS.TOKEN);
   } catch {
@@ -135,6 +191,7 @@ export async function getStoredToken(): Promise<string | null> {
 }
 
 export async function setStoredToken(token: string | null): Promise<void> {
+  await setSecureValue(SECURE_STORAGE_KEYS.TOKEN, token);
   try {
     if (token) {
       await AsyncStorage.setItem(STORAGE_KEYS.TOKEN, token);

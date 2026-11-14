@@ -22,24 +22,36 @@ import {
   Plus,
   X,
   Check,
-  DollarSign,
   Layers,
+  Edit3,
+  Trash2,
 } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { useTimesheet } from '@/src/context/TimesheetContext';
 import { useTheme } from '@/src/context/ThemeContext';
 import { Spacing, Radius } from '@/src/constants/theme';
-import { Project } from '@/src/services/api';
+import { Project, Task } from '@/src/services/api';
 
 export default function ProjectsScreen() {
   const router = useRouter();
-  const { colors, isDark } = useTheme();
-  const { projects, entries, startTimer, addProject, addTaskToProject } = useTimesheet();
+  const { colors } = useTheme();
+  const {
+    projects,
+    entries,
+    startTimer,
+    addProject,
+    editProject,
+    deleteProject,
+    addTaskToProject,
+    editTask,
+    deleteTask,
+  } = useTimesheet();
   const [search, setSearch] = useState('');
   const [expandedProjectId, setExpandedProjectId] = useState<string | null>(projects[0]?.id || null);
 
-  // New Project Modal State
+  // Project Modal State (Create or Edit)
   const [newProjectModalVisible, setNewProjectModalVisible] = useState(false);
+  const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
   const [newProjectName, setNewProjectName] = useState('');
   const [newClientName, setNewClientName] = useState('');
   const [newHourlyRate, setNewHourlyRate] = useState('165');
@@ -47,9 +59,10 @@ export default function ProjectsScreen() {
   const [newBudgetHours, setNewBudgetHours] = useState('120');
   const [newInitialTask, setNewInitialTask] = useState('General Consultation & Design');
 
-  // Add Task Modal State
+  // Task Modal State (Add or Edit)
   const [addTaskModalVisible, setAddTaskModalVisible] = useState(false);
   const [targetProjectIdForTask, setTargetProjectIdForTask] = useState<string | null>(null);
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [newTaskName, setNewTaskName] = useState('');
   const [newTaskRate, setNewTaskRate] = useState('165');
   const [newTaskBudgetHours, setNewTaskBudgetHours] = useState('40');
@@ -63,9 +76,15 @@ export default function ProjectsScreen() {
     );
   });
 
-  const getProjectLoggedHours = (projectName: string) => {
+  const getProjectLoggedHours = (project: Project) => {
+    const taskIds = new Set(project.tasks.map((t) => t.id));
     return entries
-      .filter((e) => e.projectName === projectName)
+      .filter(
+        (e) =>
+          e.projectId === project.id ||
+          taskIds.has(e.taskId) ||
+          (e.projectName && e.projectName.toLowerCase() === project.name.toLowerCase())
+      )
       .reduce((sum, e) => sum + e.hours, 0);
   };
 
@@ -75,6 +94,7 @@ export default function ProjectsScreen() {
   };
 
   const handleOpenAddProject = () => {
+    setEditingProjectId(null);
     setNewProjectName('');
     setNewClientName('');
     setNewHourlyRate('165');
@@ -82,6 +102,27 @@ export default function ProjectsScreen() {
     setNewBudgetHours('120');
     setNewInitialTask('General Consultation & Design');
     setNewProjectModalVisible(true);
+  };
+
+  const handleOpenEditProject = (project: Project) => {
+    setEditingProjectId(project.id);
+    setNewProjectName(project.name);
+    setNewClientName(project.clientName || '');
+    setNewHourlyRate(String(project.hourlyRate || 165));
+    setNewBudgetType(project.budgetType === 'TASK_HOURS' ? 'TASK_HOURS' : 'PROJECT_HOURS');
+    setNewBudgetHours(String(project.budgetHours || project.budgetLimit || 120));
+    setNewProjectModalVisible(true);
+  };
+
+  const handleDeleteProjectConfirm = (project: Project) => {
+    Alert.alert('Delete Project', `Remove "${project.name}" and its tasks?`, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: () => deleteProject(project.id),
+      },
+    ]);
   };
 
   const handleSaveProject = async () => {
@@ -92,33 +133,67 @@ export default function ProjectsScreen() {
     const rate = parseFloat(newHourlyRate) || 165;
     const bHours = parseFloat(newBudgetHours) || 100;
 
-    await addProject({
-      name: newProjectName.trim(),
-      clientName: newClientName.trim() || 'General Client',
-      hourlyRate: rate,
-      budgetHours: bHours,
-      budget: bHours * rate,
-      budgetType: newBudgetType,
-      tasks: [
-        {
-          name: newInitialTask.trim() || 'General Work',
-          hourlyRate: rate,
-          isBillable: true,
-          budgetHours: newBudgetType === 'TASK_HOURS' ? bHours : undefined,
-        },
-      ],
-    });
+    if (editingProjectId) {
+      await editProject(editingProjectId, {
+        name: newProjectName.trim(),
+        clientName: newClientName.trim() || 'General Client',
+        hourlyRate: rate,
+        budgetHours: bHours,
+        budget: bHours * rate,
+        budgetType: newBudgetType,
+      });
+    } else {
+      await addProject({
+        name: newProjectName.trim(),
+        clientName: newClientName.trim() || 'General Client',
+        hourlyRate: rate,
+        budgetHours: bHours,
+        budget: bHours * rate,
+        budgetType: newBudgetType,
+        tasks: [
+          {
+            name: newInitialTask.trim() || 'General Work',
+            hourlyRate: rate,
+            isBillable: true,
+            budgetHours: newBudgetType === 'TASK_HOURS' ? bHours : undefined,
+          },
+        ],
+      });
+    }
 
     setNewProjectModalVisible(false);
+    setEditingProjectId(null);
   };
 
   const handleOpenAddTask = (projectId: string, projectRate?: number) => {
     setTargetProjectIdForTask(projectId);
+    setEditingTaskId(null);
     setNewTaskName('');
     setNewTaskRate(String(projectRate || 165));
     setNewTaskBudgetHours('30');
     setNewTaskBillable(true);
     setAddTaskModalVisible(true);
+  };
+
+  const handleOpenEditTask = (projectId: string, task: Task, projectRate?: number) => {
+    setTargetProjectIdForTask(projectId);
+    setEditingTaskId(task.id);
+    setNewTaskName(task.name);
+    setNewTaskRate(String(task.hourlyRate || projectRate || 165));
+    setNewTaskBudgetHours(String(task.budgetHours || ''));
+    setNewTaskBillable(task.isBillable !== false);
+    setAddTaskModalVisible(true);
+  };
+
+  const handleDeleteTaskConfirm = (projectId: string, task: Task) => {
+    Alert.alert('Delete Task', `Remove "${task.name}"?`, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: () => deleteTask(projectId, task.id),
+      },
+    ]);
   };
 
   const handleSaveTask = async () => {
@@ -131,14 +206,24 @@ export default function ProjectsScreen() {
     const rate = parseFloat(newTaskRate) || 165;
     const bHours = parseFloat(newTaskBudgetHours) || 0;
 
-    await addTaskToProject(targetProjectIdForTask, {
-      name: newTaskName.trim(),
-      hourlyRate: rate,
-      isBillable: newTaskBillable,
-      budgetHours: bHours > 0 ? bHours : undefined,
-    });
+    if (editingTaskId) {
+      await editTask(targetProjectIdForTask, editingTaskId, {
+        name: newTaskName.trim(),
+        hourlyRate: rate,
+        isBillable: newTaskBillable,
+        budgetHours: bHours > 0 ? bHours : undefined,
+      });
+    } else {
+      await addTaskToProject(targetProjectIdForTask, {
+        name: newTaskName.trim(),
+        hourlyRate: rate,
+        isBillable: newTaskBillable,
+        budgetHours: bHours > 0 ? bHours : undefined,
+      });
+    }
 
     setAddTaskModalVisible(false);
+    setEditingTaskId(null);
   };
 
   return (
@@ -175,7 +260,7 @@ export default function ProjectsScreen() {
 
         {filteredProjects.map((project) => {
           const isExpanded = expandedProjectId === project.id;
-          const loggedHours = getProjectLoggedHours(project.name);
+          const loggedHours = getProjectLoggedHours(project);
           const isTaskBudget = project.budgetType === 'TASK_HOURS';
           const taskBudgetSum = project.tasks?.reduce((sum, t) => sum + (t.budgetHours || 0), 0) || 0;
           const budgetHours = isTaskBudget ? taskBudgetSum : (project.budgetHours || project.budgetLimit || 160);
@@ -247,19 +332,37 @@ export default function ProjectsScreen() {
                     <Text style={[styles.tasksHeader, { color: colors.textDim }]}>
                       TASKS & DELIVERABLES ({project.tasks.length})
                     </Text>
-                    <TouchableOpacity
-                      style={styles.addTaskInlineBtn}
-                      onPress={() => handleOpenAddTask(project.id, project.hourlyRate)}
-                      activeOpacity={0.7}
-                    >
-                      <Plus color={colors.primary} size={13} strokeWidth={2.5} style={{ marginRight: 3 }} />
-                      <Text style={[styles.addTaskInlineText, { color: colors.primary }]}>Add Task</Text>
-                    </TouchableOpacity>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                      <TouchableOpacity
+                        style={styles.addTaskInlineBtn}
+                        onPress={() => handleOpenAddTask(project.id, project.hourlyRate)}
+                        activeOpacity={0.7}
+                      >
+                        <Plus color={colors.primary} size={13} strokeWidth={2.5} style={{ marginRight: 3 }} />
+                        <Text style={[styles.addTaskInlineText, { color: colors.primary }]}>Add Task</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onPress={() => handleOpenEditProject(project)}
+                        hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                      >
+                        <Edit3 color={colors.textMuted} size={14} />
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onPress={() => handleDeleteProjectConfirm(project)}
+                        hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                      >
+                        <Trash2 color={colors.danger} size={14} />
+                      </TouchableOpacity>
+                    </View>
                   </View>
 
                   {project.tasks.map((task) => (
                     <View key={task.id} style={[styles.taskItem, { borderBottomColor: colors.borderSubtle }]}>
-                      <View style={styles.taskInfo}>
+                      <TouchableOpacity
+                        style={styles.taskInfo}
+                        onPress={() => handleOpenEditTask(project.id, task, project.hourlyRate)}
+                        activeOpacity={0.7}
+                      >
                         <Text style={[styles.taskName, { color: colors.text }]}>{task.name}</Text>
                         <View style={styles.taskMetaRow}>
                           {task.budgetHours ? (
@@ -275,17 +378,25 @@ export default function ProjectsScreen() {
                             {task.isBillable !== false ? 'Billable' : 'Internal'}
                           </Text>
                         </View>
-                      </View>
-
-                      {/* Start Timer on this Task Button */}
-                      <TouchableOpacity
-                        style={[styles.startTaskBtn, { backgroundColor: colors.primary }]}
-                        onPress={() => handleStartTimerOnTask(project.id, task.id)}
-                        activeOpacity={0.8}
-                      >
-                        <Play color="#FFFFFF" size={11} strokeWidth={2.8} style={{ marginRight: 4 }} />
-                        <Text style={styles.startTaskBtnText}>Track</Text>
                       </TouchableOpacity>
+
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                        <TouchableOpacity
+                          onPress={() => handleDeleteTaskConfirm(project.id, task)}
+                          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                        >
+                          <Trash2 color={colors.textDim} size={13} />
+                        </TouchableOpacity>
+                        {/* Start Timer on this Task Button */}
+                        <TouchableOpacity
+                          style={[styles.startTaskBtn, { backgroundColor: colors.primary }]}
+                          onPress={() => handleStartTimerOnTask(project.id, task.id)}
+                          activeOpacity={0.8}
+                        >
+                          <Play color="#FFFFFF" size={11} strokeWidth={2.8} style={{ marginRight: 4 }} />
+                          <Text style={styles.startTaskBtnText}>Track</Text>
+                        </TouchableOpacity>
+                      </View>
                     </View>
                   ))}
                 </View>
@@ -305,7 +416,9 @@ export default function ProjectsScreen() {
             <View style={[styles.modalHeader, { borderBottomColor: colors.borderSubtle }]}>
               <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                 <Briefcase color={colors.primary} size={18} strokeWidth={2.2} style={{ marginRight: 8 }} />
-                <Text style={[styles.modalTitle, { color: colors.text }]}>Create New Project</Text>
+                <Text style={[styles.modalTitle, { color: colors.text }]}>
+                  {editingProjectId ? 'Edit Project' : 'Create New Project'}
+                </Text>
               </View>
               <TouchableOpacity onPress={() => setNewProjectModalVisible(false)}>
                 <X color={colors.textDim} size={20} />
@@ -408,17 +521,21 @@ export default function ProjectsScreen() {
                 </TouchableOpacity>
               </View>
 
-              <Text style={[styles.inputLabel, { color: colors.textDim }]}>INITIAL TASK DELIVERABLE</Text>
-              <TextInput
-                style={[
-                  styles.textInput,
-                  { backgroundColor: colors.bg, borderColor: colors.borderSubtle, color: colors.text },
-                ]}
-                placeholder="e.g. Schematic Architecture & CAD"
-                placeholderTextColor={colors.textDim}
-                value={newInitialTask}
-                onChangeText={setNewInitialTask}
-              />
+              {!editingProjectId && (
+                <>
+                  <Text style={[styles.inputLabel, { color: colors.textDim }]}>INITIAL TASK DELIVERABLE</Text>
+                  <TextInput
+                    style={[
+                      styles.textInput,
+                      { backgroundColor: colors.bg, borderColor: colors.borderSubtle, color: colors.text },
+                    ]}
+                    placeholder="e.g. Schematic Architecture & CAD"
+                    placeholderTextColor={colors.textDim}
+                    value={newInitialTask}
+                    onChangeText={setNewInitialTask}
+                  />
+                </>
+              )}
             </ScrollView>
 
             <View style={[styles.modalFooter, { borderTopColor: colors.borderSubtle }]}>
@@ -450,7 +567,9 @@ export default function ProjectsScreen() {
             <View style={[styles.modalHeader, { borderBottomColor: colors.borderSubtle }]}>
               <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                 <Layers color={colors.primary} size={18} strokeWidth={2.2} style={{ marginRight: 8 }} />
-                <Text style={[styles.modalTitle, { color: colors.text }]}>Add Project Task</Text>
+                <Text style={[styles.modalTitle, { color: colors.text }]}>
+                  {editingTaskId ? 'Edit Project Task' : 'Add Project Task'}
+                </Text>
               </View>
               <TouchableOpacity onPress={() => setAddTaskModalVisible(false)}>
                 <X color={colors.textDim} size={20} />
@@ -524,7 +643,7 @@ export default function ProjectsScreen() {
                 onPress={handleSaveTask}
               >
                 <Check color="#FFFFFF" size={16} strokeWidth={2.5} style={{ marginRight: 4 }} />
-                <Text style={styles.saveBtnText}>Add Task</Text>
+                <Text style={styles.saveBtnText}>{editingTaskId ? 'Save Task' : 'Add Task'}</Text>
               </TouchableOpacity>
             </View>
           </View>

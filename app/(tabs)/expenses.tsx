@@ -25,6 +25,7 @@ import {
   Tag,
   DollarSign,
   ChevronDown,
+  Edit3,
 } from 'lucide-react-native';
 import { useExpenses } from '@/src/context/ExpenseContext';
 import { useTimesheet } from '@/src/context/TimesheetContext';
@@ -43,17 +44,20 @@ const CATEGORIES = [
 ];
 
 export default function ExpensesScreen() {
-  const { colors, isDark } = useTheme();
-  const { expenses, addExpense, deleteExpense, totalExpensesAmount, billableExpensesAmount } = useExpenses();
+  const { colors } = useTheme();
+  const { expenses, addExpense, updateExpense, deleteExpense, totalExpensesAmount, billableExpensesAmount } =
+    useExpenses();
   const { projects } = useTimesheet();
 
   const [search, setSearch] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [modalVisible, setModalVisible] = useState(false);
+  const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
 
   // Form State
   const [amount, setAmount] = useState('');
   const [description, setDescription] = useState('');
+  const [merchant, setMerchant] = useState('');
   const [projectId, setProjectId] = useState<string>(projects[0]?.id || 'p1');
   const [category, setCategory] = useState<string>(CATEGORIES[0]);
   const [isBillable, setIsBillable] = useState(true);
@@ -65,6 +69,7 @@ export default function ExpensesScreen() {
       const matchSearch =
         search.trim() === '' ||
         e.description.toLowerCase().includes(search.toLowerCase()) ||
+        (e.merchant && e.merchant.toLowerCase().includes(search.toLowerCase())) ||
         (e.projectName && e.projectName.toLowerCase().includes(search.toLowerCase())) ||
         (e.clientName && e.clientName.toLowerCase().includes(search.toLowerCase()));
 
@@ -73,15 +78,29 @@ export default function ExpensesScreen() {
     });
   }, [expenses, search, selectedCategory]);
 
-  const selectedProject = projects.find((p) => p.id === projectId) || projects[0];
+  const selectedProject = projects.find((p) => p.id === projectId) || projects[0] || { id: 'p1', name: 'General' };
 
   const handleOpenModal = () => {
+    setEditingExpense(null);
     setAmount('');
     setDescription('');
+    setMerchant('');
     setProjectId(projects[0]?.id || 'p1');
     setCategory(CATEGORIES[0]);
     setIsBillable(true);
     setDateStr(getLocalDateString());
+    setModalVisible(true);
+  };
+
+  const handleOpenEditModal = (exp: Expense) => {
+    setEditingExpense(exp);
+    setAmount(String(exp.amount));
+    setDescription(exp.description);
+    setMerchant(exp.merchant || '');
+    setProjectId(exp.projectId || projects[0]?.id || 'p1');
+    setCategory(exp.category || CATEGORIES[0]);
+    setIsBillable(exp.isBillable);
+    setDateStr(exp.date || getLocalDateString());
     setModalVisible(true);
   };
 
@@ -97,18 +116,25 @@ export default function ExpensesScreen() {
     }
 
     const proj = projects.find((p) => p.id === projectId) || projects[0];
-
-    await addExpense({
+    const payload = {
       amount: Math.round(numAmount * 100) / 100,
       description: description.trim(),
+      merchant: merchant.trim() || undefined,
       category,
       date: dateStr,
       projectId: proj.id,
       projectName: proj.name,
       clientName: proj.clientName || 'General Client',
       isBillable,
-    });
+    };
 
+    if (editingExpense) {
+      await updateExpense(editingExpense.id, payload);
+    } else {
+      await addExpense(payload);
+    }
+
+    setEditingExpense(null);
     setModalVisible(false);
   };
 
@@ -261,8 +287,10 @@ export default function ExpensesScreen() {
         ) : (
           filteredExpenses.map((expense) => {
             return (
-              <View
+              <TouchableOpacity
                 key={expense.id}
+                activeOpacity={0.75}
+                onPress={() => handleOpenEditModal(expense)}
                 style={[
                   styles.expenseCard,
                   { backgroundColor: colors.surface, borderColor: colors.borderSubtle },
@@ -293,13 +321,16 @@ export default function ExpensesScreen() {
                     </View>
                   </View>
 
-                  <TouchableOpacity
-                    onPress={() => handleDeleteExpense(expense.id, expense.description, Number(expense.amount))}
-                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                    style={styles.deleteButton}
-                  >
-                    <Trash2 color={colors.textDim} size={15} />
-                  </TouchableOpacity>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                    <Edit3 color={colors.textDim} size={14} />
+                    <TouchableOpacity
+                      onPress={() => handleDeleteExpense(expense.id, expense.description, Number(expense.amount))}
+                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                      style={styles.deleteButton}
+                    >
+                      <Trash2 color={colors.textDim} size={15} />
+                    </TouchableOpacity>
+                  </View>
                 </View>
 
                 {/* Description */}
@@ -313,6 +344,7 @@ export default function ExpensesScreen() {
                   <Text style={[styles.projectMetaText, { color: colors.textMuted }]} numberOfLines={1}>
                     {expense.projectName || 'General Project'}
                     {expense.clientName ? ` (${expense.clientName})` : ''}
+                    {expense.merchant ? ` · ${expense.merchant}` : ''}
                   </Text>
                 </View>
 
@@ -327,7 +359,7 @@ export default function ExpensesScreen() {
                     <Text style={[styles.footerText, { color: colors.textDim }]}>{expense.category}</Text>
                   </View>
                 </View>
-              </View>
+              </TouchableOpacity>
             );
           })
         )}
@@ -344,7 +376,9 @@ export default function ExpensesScreen() {
             <View style={[styles.modalHeader, { borderBottomColor: colors.borderSubtle }]}>
               <View style={styles.modalHeaderLeft}>
                 <Receipt color={colors.primary} size={20} strokeWidth={2.2} style={{ marginRight: 8 }} />
-                <Text style={[styles.modalTitle, { color: colors.text }]}>Log New Expense</Text>
+                <Text style={[styles.modalTitle, { color: colors.text }]}>
+                  {editingExpense ? 'Edit Expense' : 'Log New Expense'}
+                </Text>
               </View>
               <TouchableOpacity onPress={() => setModalVisible(false)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
                 <X color={colors.textDim} size={20} />
@@ -385,6 +419,19 @@ export default function ExpensesScreen() {
                 onChangeText={setDescription}
                 multiline
                 numberOfLines={2}
+              />
+
+              {/* Merchant Input */}
+              <Text style={[styles.inputLabel, { color: colors.textDim }]}>MERCHANT / VENDOR (OPTIONAL)</Text>
+              <TextInput
+                style={[
+                  styles.textInput,
+                  { backgroundColor: colors.bg, borderColor: colors.borderSubtle, color: colors.text },
+                ]}
+                placeholder="e.g. Delta Air Lines, Reprographics Studio"
+                placeholderTextColor={colors.textDim}
+                value={merchant}
+                onChangeText={setMerchant}
               />
 
               {/* Project Selection */}
@@ -519,7 +566,7 @@ export default function ExpensesScreen() {
                 activeOpacity={0.8}
               >
                 <Check color="#FFFFFF" size={16} strokeWidth={2.5} style={{ marginRight: 6 }} />
-                <Text style={styles.saveBtnText}>Save Expense</Text>
+                <Text style={styles.saveBtnText}>{editingExpense ? 'Save Changes' : 'Save Expense'}</Text>
               </TouchableOpacity>
             </View>
           </View>

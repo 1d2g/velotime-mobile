@@ -1,9 +1,10 @@
 import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
-import { TimesheetSubmission, TeamMember, Invoice, apiRequest } from '../services/api';
+import { TimesheetSubmission, TeamMember, Invoice, apiRequest, getLocalDateString } from '../services/api';
 import { useAuth } from './AuthContext';
 import { useTimesheet } from './TimesheetContext';
+import { useExpenses } from './ExpenseContext';
 
 export const INITIAL_SUBMISSIONS: TimesheetSubmission[] = [
   {
@@ -191,6 +192,12 @@ interface ManagerContextType {
   rejectSubmission: (id: string, note: string) => Promise<void>;
   unlockSubmission: (id: string) => Promise<void>;
   updateTeamMemberRates: (memberId: string, costRate: number, billingRate: number) => Promise<void>;
+  addTeamMember: (member: Omit<TeamMember, 'id'>) => Promise<TeamMember>;
+  updateTeamMember: (memberId: string, updates: Partial<TeamMember>) => Promise<void>;
+  removeTeamMember: (memberId: string) => Promise<void>;
+  createInvoice: (invoice: Omit<Invoice, 'id'>) => Promise<Invoice>;
+  updateInvoiceStatus: (invoiceId: string, status: Invoice['status']) => Promise<void>;
+  deleteInvoice: (invoiceId: string) => Promise<void>;
   // Computed Executive Metrics
   metrics: {
     totalTeamHours: number;
@@ -199,6 +206,7 @@ interface ManagerContextType {
     grossBillableRevenue: number;
     blendedHourlyRate: number;
     uninvoicedAmount: number;
+    uninvoicedExpenseAmount: number;
     activeProjectsCount: number;
     teamCapacityBurnPct: number;
   };
@@ -209,6 +217,9 @@ interface ManagerContextType {
     hours: number;
     billableHours: number;
     revenue: number;
+    costAmount: number;
+    profitAmount: number;
+    marginPercent: number;
     budgetHours: number;
     budgetPct: number;
     riskLevel?: 'safe' | 'warning' | 'critical';
@@ -224,6 +235,7 @@ interface ManagerContextType {
     hours: number;
     billableHours: number;
     revenue: number;
+    costAmount: number;
     capacity: number;
     utilizationPct: number;
   }[];
@@ -238,8 +250,9 @@ interface ManagerContextType {
 const ManagerContext = createContext<ManagerContextType | null>(null);
 
 export function ManagerProvider({ children }: { children: React.ReactNode }) {
-  const { user, isDemoMode } = useAuth();
-  const { projects } = useTimesheet();
+  const { user, isDemoMode, orgSettings, updateOrgSettings } = useAuth();
+  const { projects, entries } = useTimesheet();
+  const { expenses } = useExpenses();
 
   const [submissions, setSubmissions] = useState<TimesheetSubmission[]>(INITIAL_SUBMISSIONS);
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>(INITIAL_TEAM_MEMBERS);
@@ -360,7 +373,79 @@ export function ManagerProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  // Metrics multiplier based on timeframe
+  const addTeamMember = async (member: Omit<TeamMember, 'id'>): Promise<TeamMember> => {
+    try {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch {}
+    const created: TeamMember = {
+      ...member,
+      id: 'usr_' + Date.now(),
+      weeklyLoggedHours: member.weeklyLoggedHours ?? 0,
+    };
+    const updated = [...teamMembers, created];
+    setTeamMembers(updated);
+    await AsyncStorage.setItem('velotime_offline_team_members', JSON.stringify(updated));
+    return created;
+  };
+
+  const updateTeamMember = async (memberId: string, updates: Partial<TeamMember>) => {
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    } catch {}
+    const updated = teamMembers.map((m) => (m.id === memberId ? { ...m, ...updates } : m));
+    setTeamMembers(updated);
+    await AsyncStorage.setItem('velotime_offline_team_members', JSON.stringify(updated));
+  };
+
+  const removeTeamMember = async (memberId: string) => {
+    try {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    } catch {}
+    const updated = teamMembers.filter((m) => m.id !== memberId);
+    setTeamMembers(updated);
+    await AsyncStorage.setItem('velotime_offline_team_members', JSON.stringify(updated));
+  };
+
+  const createInvoice = async (invoice: Omit<Invoice, 'id'>): Promise<Invoice> => {
+    try {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch {}
+    const created: Invoice = {
+      ...invoice,
+      id: 'inv_' + Date.now(),
+      issueDate: invoice.issueDate || getLocalDateString(),
+      auditHash:
+        invoice.auditHash ||
+        `VT-${Math.random().toString(16).slice(2, 6).toUpperCase()}-${Date.now().toString(36).toUpperCase()}`,
+    };
+    const updated = [created, ...invoices];
+    setInvoices(updated);
+    await AsyncStorage.setItem('velotime_offline_invoices', JSON.stringify(updated));
+    await updateOrgSettings({
+      nextInvoiceNumber: (orgSettings.nextInvoiceNumber || 105) + 1,
+    });
+    return created;
+  };
+
+  const updateInvoiceStatus = async (invoiceId: string, status: Invoice['status']) => {
+    try {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch {}
+    const updated = invoices.map((inv) => (inv.id === invoiceId ? { ...inv, status } : inv));
+    setInvoices(updated);
+    await AsyncStorage.setItem('velotime_offline_invoices', JSON.stringify(updated));
+  };
+
+  const deleteInvoice = async (invoiceId: string) => {
+    try {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    } catch {}
+    const updated = invoices.filter((inv) => inv.id !== invoiceId);
+    setInvoices(updated);
+    await AsyncStorage.setItem('velotime_offline_invoices', JSON.stringify(updated));
+  };
+
+  // Metrics multiplier based on timeframe for studio team baseline
   const timeframeMultiplier = useMemo(() => {
     switch (reportTimeframe) {
       case 'week':
@@ -374,19 +459,61 @@ export function ManagerProvider({ children }: { children: React.ReactNode }) {
     }
   }, [reportTimeframe]);
 
-  // Aggregate project reporting with predictive retainer pacing telemetry
+  // Real logged entries aggregated per project (including live entries added/edited in app)
+  const loggedByProject = useMemo(() => {
+    const map: Record<string, { hours: number; billableHours: number }> = {};
+    for (const e of entries) {
+      const matchedProject = projects.find(
+        (p) =>
+          p.id === e.projectId ||
+          p.tasks.some((t) => t.id === e.taskId) ||
+          (e.projectName && p.name.toLowerCase() === e.projectName.toLowerCase())
+      );
+      const key = matchedProject?.id || e.projectId || e.projectName || 'unknown';
+      if (!map[key]) {
+        map[key] = { hours: 0, billableHours: 0 };
+      }
+      map[key].hours += e.hours;
+      if (e.isBillable !== false) {
+        map[key].billableHours += e.hours;
+      }
+    }
+    return map;
+  }, [entries, projects]);
+
+  const averageCostRate = useMemo(() => {
+    if (teamMembers.length === 0) return 75;
+    const sum = teamMembers.reduce((acc, m) => acc + (m.defaultCostRate || 70), 0);
+    return sum / teamMembers.length;
+  }, [teamMembers]);
+
+  // Aggregate project reporting with real logged hours + predictive retainer pacing telemetry
   const projectBreakdowns = useMemo(() => {
     const now = new Date();
     const currentDay = Math.max(1, now.getDate());
     const totalDaysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
     const workdayElapsedRatio = Math.max(0.1, Math.min(1.0, currentDay / totalDaysInMonth));
 
-    return projects.map((p, idx) => {
-      const baseHours = idx === 0 ? 92.5 : idx === 1 ? 58.0 : 33.5;
-      const hours = Math.round(baseHours * timeframeMultiplier * 10) / 10;
-      const billableHours = Math.round(hours * 0.92 * 10) / 10;
+    const demoBaselines: Record<string, number> = {
+      p1: 88.0,
+      p2: 55.75,
+      p3: 33.5,
+    };
+
+    return projects.map((p) => {
+      const liveStats = loggedByProject[p.id] || { hours: 0, billableHours: 0 };
+      const baseline = isDemoMode ? demoBaselines[p.id] ?? 0 : 0;
+      const scaledBaseline = Math.round(baseline * timeframeMultiplier * 10) / 10;
+      const hours = Math.round((liveStats.hours + scaledBaseline) * 10) / 10;
+      const billableHours =
+        Math.round((liveStats.billableHours + scaledBaseline * 0.92) * 10) / 10;
+
       const rate = p.hourlyRate || 165;
       const revenue = Math.round(billableHours * rate);
+      const costAmount = Math.round(hours * averageCostRate);
+      const profitAmount = revenue - costAmount;
+      const marginPercent = revenue > 0 ? Math.round((profitAmount / revenue) * 100) : 0;
+
       const budgetHours = p.budgetHours || (p.budgetLimit ? Math.round(p.budgetLimit / rate) : 120);
       const budgetPct = budgetHours > 0 ? Math.min(100, Math.round((hours / budgetHours) * 100)) : 0;
 
@@ -412,6 +539,9 @@ export function ManagerProvider({ children }: { children: React.ReactNode }) {
         hours,
         billableHours,
         revenue,
+        costAmount,
+        profitAmount,
+        marginPercent,
         budgetHours,
         budgetPct,
         riskLevel,
@@ -421,30 +551,50 @@ export function ManagerProvider({ children }: { children: React.ReactNode }) {
         burnRateDaily,
       };
     });
-  }, [projects, timeframeMultiplier]);
+  }, [projects, loggedByProject, isDemoMode, timeframeMultiplier, averageCostRate]);
+
+  const userLiveHours = useMemo(() => {
+    return entries.reduce((sum, e) => sum + e.hours, 0);
+  }, [entries]);
 
   // Aggregate team reporting
   const teamBreakdowns = useMemo(() => {
     return teamMembers.map((tm) => {
-      const logged = tm.weeklyLoggedHours || 38.0;
+      const isCurrentUser =
+        (user?.id && tm.id === user.id) ||
+        (user?.email && tm.email.toLowerCase() === user.email.toLowerCase()) ||
+        tm.id === 'guest_mobile_user';
+      const logged = isCurrentUser
+        ? Math.max(tm.weeklyLoggedHours || 0, userLiveHours)
+        : tm.weeklyLoggedHours || 0;
       const hours = Math.round(logged * timeframeMultiplier * 10) / 10;
       const billableHours = Math.round(hours * 0.9 * 10) / 10;
       const revenue = Math.round(billableHours * tm.defaultBillingRate);
-      const capacity = Math.round(tm.capacityHours * (reportTimeframe === 'month' ? 4 : reportTimeframe === 'all' ? 12 : 1));
-      const utilizationPct = capacity > 0 ? Math.min(100, Math.round((billableHours / capacity) * 100)) : 88;
+      const costAmount = Math.round(hours * (tm.defaultCostRate || 65));
+      const capacity = Math.round(
+        tm.capacityHours * (reportTimeframe === 'month' ? 4 : reportTimeframe === 'all' ? 12 : 1)
+      );
+      const utilizationPct =
+        capacity > 0 ? Math.min(100, Math.round((billableHours / capacity) * 100)) : 0;
 
       return {
         id: tm.id,
         name: `${tm.firstName} ${tm.lastName}`,
-        role: tm.role === 'admin' ? 'Studio Partner' : tm.role === 'manager' ? 'Design Principal' : 'Architect',
+        role:
+          tm.role === 'admin'
+            ? 'Studio Partner'
+            : tm.role === 'manager'
+            ? 'Design Principal'
+            : 'Team Member',
         hours,
         billableHours,
         revenue,
+        costAmount,
         capacity,
         utilizationPct,
       };
     });
-  }, [teamMembers, timeframeMultiplier, reportTimeframe]);
+  }, [teamMembers, user, userLiveHours, timeframeMultiplier, reportTimeframe]);
 
   // Aggregate client reporting
   const clientBreakdowns = useMemo(() => {
@@ -465,17 +615,33 @@ export function ManagerProvider({ children }: { children: React.ReactNode }) {
     }));
   }, [projectBreakdowns]);
 
+  const uninvoicedExpenseAmount = useMemo(() => {
+    return expenses
+      .filter((ex) => ex.isBillable && ex.status !== 'invoiced')
+      .reduce((sum, ex) => sum + ex.amount, 0);
+  }, [expenses]);
+
   // Executive High-level KPIs
   const metrics = useMemo(() => {
     const totalTeamHours = projectBreakdowns.reduce((sum, p) => sum + p.hours, 0);
     const totalBillableHours = projectBreakdowns.reduce((sum, p) => sum + p.billableHours, 0);
     const grossBillableRevenue = projectBreakdowns.reduce((sum, p) => sum + p.revenue, 0);
-    const totalCapacity = teamMembers.length * 40 * (reportTimeframe === 'month' ? 4 : reportTimeframe === 'all' ? 12 : 1);
-    const utilizationRate = totalCapacity > 0 ? Math.min(100, Math.round((totalBillableHours / totalCapacity) * 100)) : 88;
-    const blendedHourlyRate = totalBillableHours > 0 ? Math.round(grossBillableRevenue / totalBillableHours) : 170;
-    const uninvoicedAmount = Math.round(grossBillableRevenue * 0.38);
+    const billedTotal = invoices
+      .filter((inv) => inv.status === 'sent' || inv.status === 'paid')
+      .reduce((sum, inv) => sum + inv.amount, 0);
+    const uninvoicedTime = Math.max(0, grossBillableRevenue - billedTotal);
+    const uninvoicedAmount = Math.round(uninvoicedTime + uninvoicedExpenseAmount);
+    const totalCapacity =
+      Math.max(1, teamMembers.length) *
+      40 *
+      (reportTimeframe === 'month' ? 4 : reportTimeframe === 'all' ? 12 : 1);
+    const utilizationRate =
+      totalCapacity > 0 ? Math.min(100, Math.round((totalBillableHours / totalCapacity) * 100)) : 88;
+    const blendedHourlyRate =
+      totalBillableHours > 0 ? Math.round(grossBillableRevenue / totalBillableHours) : 170;
     const activeProjectsCount = projects.length;
-    const teamCapacityBurnPct = totalCapacity > 0 ? Math.min(100, Math.round((totalTeamHours / totalCapacity) * 100)) : 90;
+    const teamCapacityBurnPct =
+      totalCapacity > 0 ? Math.min(100, Math.round((totalTeamHours / totalCapacity) * 100)) : 90;
 
     return {
       totalTeamHours: Math.round(totalTeamHours * 10) / 10,
@@ -484,10 +650,11 @@ export function ManagerProvider({ children }: { children: React.ReactNode }) {
       grossBillableRevenue,
       blendedHourlyRate,
       uninvoicedAmount,
+      uninvoicedExpenseAmount: Math.round(uninvoicedExpenseAmount * 100) / 100,
       activeProjectsCount,
       teamCapacityBurnPct,
     };
-  }, [projectBreakdowns, teamMembers, reportTimeframe, projects]);
+  }, [projectBreakdowns, teamMembers, reportTimeframe, projects, invoices, uninvoicedExpenseAmount]);
 
   return (
     <ManagerContext.Provider
@@ -503,6 +670,12 @@ export function ManagerProvider({ children }: { children: React.ReactNode }) {
         rejectSubmission,
         unlockSubmission,
         updateTeamMemberRates,
+        addTeamMember,
+        updateTeamMember,
+        removeTeamMember,
+        createInvoice,
+        updateInvoiceStatus,
+        deleteInvoice,
         metrics,
         projectBreakdowns,
         teamBreakdowns,

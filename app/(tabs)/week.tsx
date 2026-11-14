@@ -19,18 +19,20 @@ import {
   Check,
   AlertTriangle,
   Lock,
-  Unlock,
+  Edit3,
+  Users,
 } from 'lucide-react-native';
 import { useAuth } from '@/src/context/AuthContext';
 import { useTimesheet } from '@/src/context/TimesheetContext';
+import { useManager } from '@/src/context/ManagerContext';
 import { useTheme } from '@/src/context/ThemeContext';
 import { Spacing, Radius } from '@/src/constants/theme';
 import { ManualEntryModal } from '@/src/components/ManualEntryModal';
-import { getLocalDateString } from '@/src/services/api';
+import { Entry, getLocalDateString } from '@/src/services/api';
 
 export default function WeekScreen() {
-  const { colors, isDark } = useTheme();
-  const { isDemoMode } = useAuth();
+  const { colors } = useTheme();
+  const { isManager } = useAuth();
   const {
     projects,
     entries,
@@ -41,17 +43,47 @@ export default function WeekScreen() {
     submissionStatus,
     submissionRejectNote,
     logManualEntry,
+    updateEntry,
     deleteEntry,
+    selectedEmployeeName,
+    setSelectedEmployeeName,
     submitWeekTimesheet,
     goToPrevWeek,
     goToNextWeek,
     goToCurrentWeek,
   } = useTimesheet();
+  const { teamMembers, submissions, approveSubmission } = useManager();
 
-  const [viewMode, setViewMode] = useState<'week' | 'day'>('week');
+  const [viewMode, setViewMode] = useState<'week' | 'day' | 'month'>('week');
   const [selectedDayId, setSelectedDayId] = useState<string>('all');
   const [manualModalVisible, setManualModalVisible] = useState(false);
   const [targetDateForEntry, setTargetDateForEntry] = useState<string>(getLocalDateString());
+  const [editingEntry, setEditingEntry] = useState<Entry | null>(null);
+
+  const isViewingTeamMember = isManager && selectedEmployeeName !== 'My Timesheet';
+  const viewedMember = useMemo(() => {
+    if (!isViewingTeamMember) return null;
+    return teamMembers.find((m) => `${m.firstName} ${m.lastName}` === selectedEmployeeName) || null;
+  }, [isViewingTeamMember, teamMembers, selectedEmployeeName]);
+
+  const viewedSubmission = useMemo(() => {
+    if (!viewedMember) return null;
+    return (
+      submissions.find((s) => s.userId === viewedMember.id || s.userName === selectedEmployeeName) ||
+      null
+    );
+  }, [viewedMember, submissions, selectedEmployeeName]);
+
+  const activeMonthPrefix = useMemo(() => {
+    const refDate = weekDates[0]?.id || getLocalDateString();
+    return refDate.slice(0, 7); // YYYY-MM
+  }, [weekDates]);
+
+  const activeMonthLabel = useMemo(() => {
+    const [y, m] = activeMonthPrefix.split('-').map(Number);
+    if (!y || !m) return 'This Month';
+    return new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  }, [activeMonthPrefix]);
 
   const activeDayDate = useMemo(() => {
     if (selectedDayId !== 'all') {
@@ -63,6 +95,9 @@ export default function WeekScreen() {
   }, [selectedDayId, weekDates]);
 
   const displayedEntries = useMemo(() => {
+    if (viewMode === 'month') {
+      return entries.filter((e) => e.date?.startsWith(activeMonthPrefix));
+    }
     if (viewMode === 'day') {
       return entries.filter((e) => e.date === activeDayDate);
     }
@@ -71,7 +106,27 @@ export default function WeekScreen() {
       return entries.filter((e) => weekDateSet.has(e.date));
     }
     return entries.filter((e) => e.date === selectedDayId);
-  }, [entries, viewMode, activeDayDate, selectedDayId, weekDates]);
+  }, [entries, viewMode, activeDayDate, selectedDayId, weekDates, activeMonthPrefix]);
+
+  const monthTotalHours = useMemo(() => {
+    return entries
+      .filter((e) => e.date?.startsWith(activeMonthPrefix))
+      .reduce((sum, e) => sum + e.hours, 0);
+  }, [entries, activeMonthPrefix]);
+
+  const monthProjectGroups = useMemo(() => {
+    const map: Record<string, { projectName: string; clientName: string; hours: number; count: number }> = {};
+    for (const e of entries) {
+      if (!e.date?.startsWith(activeMonthPrefix)) continue;
+      const key = e.projectName || 'General Project';
+      if (!map[key]) {
+        map[key] = { projectName: key, clientName: e.clientName || 'General', hours: 0, count: 0 };
+      }
+      map[key].hours += e.hours;
+      map[key].count += 1;
+    }
+    return Object.values(map).sort((a, b) => b.hours - a.hours);
+  }, [entries, activeMonthPrefix]);
 
   const dailyTotals = useMemo(() => {
     const map: Record<string, number> = {};
@@ -129,7 +184,20 @@ export default function WeekScreen() {
       );
       return;
     }
+    setEditingEntry(null);
     setTargetDateForEntry(dateStr);
+    setManualModalVisible(true);
+  };
+
+  const handleEditEntry = (entry: Entry) => {
+    if (isApprovedLocked) {
+      Alert.alert(
+        'Timesheet Approved & Locked',
+        'This timesheet has already been approved and locked from edits.'
+      );
+      return;
+    }
+    setEditingEntry(entry);
     setManualModalVisible(true);
   };
 
@@ -166,11 +234,15 @@ export default function WeekScreen() {
             </TouchableOpacity>
 
             <TouchableOpacity onPress={goToCurrentWeek} style={styles.navTitleCenter}>
-              <Text style={[styles.navWeekTitle, { color: colors.text }]}>{weekLabel}</Text>
+              <Text style={[styles.navWeekTitle, { color: colors.text }]}>
+                {viewMode === 'month' ? activeMonthLabel : weekLabel}
+              </Text>
               {weekOffset !== 0 ? (
                 <Text style={[styles.jumpTodayText, { color: colors.primary }]}>Jump to Today</Text>
               ) : (
-                <Text style={[styles.currentWeekTag, { color: colors.textMuted }]}>Current Active Week</Text>
+                <Text style={[styles.currentWeekTag, { color: colors.textMuted }]}>
+                  {viewMode === 'month' ? 'Monthly Summary' : 'Current Active Week'}
+                </Text>
               )}
             </TouchableOpacity>
 
@@ -183,43 +255,137 @@ export default function WeekScreen() {
             </TouchableOpacity>
           </View>
 
-          {/* View Mode Switcher: Day vs Week */}
+          {/* View Mode Switcher: Week View vs Day View vs Month View */}
           <View style={[styles.modeSwitcher, { backgroundColor: colors.surfaceSubtle }]}>
-            <TouchableOpacity
-              style={[
-                styles.modeBtn,
-                viewMode === 'week' && [styles.modeBtnActive, { backgroundColor: colors.surface }],
-              ]}
-              onPress={() => setViewMode('week')}
-            >
-              <Text
+            {(['week', 'day', 'month'] as const).map((m) => (
+              <TouchableOpacity
+                key={m}
                 style={[
-                  styles.modeBtnText,
-                  { color: viewMode === 'week' ? colors.primary : colors.textMuted },
+                  styles.modeBtn,
+                  viewMode === m && [styles.modeBtnActive, { backgroundColor: colors.surface }],
                 ]}
+                onPress={() => setViewMode(m)}
               >
-                Week Matrix
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[
-                styles.modeBtn,
-                viewMode === 'day' && [styles.modeBtnActive, { backgroundColor: colors.surface }],
-              ]}
-              onPress={() => setViewMode('day')}
-            >
-              <Text
-                style={[
-                  styles.modeBtnText,
-                  { color: viewMode === 'day' ? colors.primary : colors.textMuted },
-                ]}
-              >
-                Day View
-              </Text>
-            </TouchableOpacity>
+                <Text
+                  style={[
+                    styles.modeBtnText,
+                    { color: viewMode === m ? colors.primary : colors.textMuted },
+                  ]}
+                >
+                  {m === 'week' ? 'Week View' : m === 'day' ? 'Day View' : 'Month View'}
+                </Text>
+              </TouchableOpacity>
+            ))}
           </View>
         </View>
+
+        {/* Manager Employee Timesheet Switcher */}
+        {isManager && (
+          <View style={{ marginBottom: Spacing.sm }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+              <Users color={colors.primary} size={13} />
+              <Text style={[styles.filterSectionTitle, { color: colors.textDim, marginBottom: 0 }]}>
+                VIEWING TIMESHEET FOR
+              </Text>
+            </View>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6 }}>
+              {['My Timesheet', ...teamMembers.filter((m) => m.id !== 'guest_mobile_user').map((m) => `${m.firstName} ${m.lastName}`)].map((name) => {
+                const active = selectedEmployeeName === name;
+                return (
+                  <TouchableOpacity
+                    key={name}
+                    style={[
+                      styles.employeeChip,
+                      {
+                        backgroundColor: active ? colors.primaryMuted : colors.surface,
+                        borderColor: active ? colors.primary : colors.borderSubtle,
+                      },
+                    ]}
+                    onPress={() => setSelectedEmployeeName(name)}
+                  >
+                    <Text
+                      style={[
+                        styles.employeeChipText,
+                        { color: active ? colors.primary : colors.textMuted },
+                      ]}
+                    >
+                      {name}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
+        )}
+
+        {/* Team Member Timesheet View (when Manager inspects a direct report) */}
+        {isViewingTeamMember && viewedMember && (
+          <View style={[styles.teamInspectCard, { backgroundColor: colors.surface, borderColor: colors.primary }]}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+              <View>
+                <Text style={[styles.teamInspectTitle, { color: colors.text }]}>
+                  {viewedMember.firstName} {viewedMember.lastName}
+                </Text>
+                <Text style={{ fontSize: 12, color: colors.textMuted, marginTop: 2 }}>
+                  {viewedMember.email} · Weekly Capacity {viewedMember.capacityHours}h
+                </Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => setSelectedEmployeeName('My Timesheet')}
+                style={[styles.resetEmployeeBtn, { backgroundColor: colors.surfaceSubtle }]}
+              >
+                <Text style={{ fontSize: 11, fontWeight: '700', color: colors.primary }}>Back to Mine</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={[styles.teamInspectStats, { borderTopColor: colors.borderSubtle }]}>
+              <View>
+                <Text style={{ fontSize: 18, fontWeight: '800', color: colors.text }}>
+                  {(viewedSubmission?.totalHours || viewedMember.weeklyLoggedHours || 38.5).toFixed(1)}h
+                </Text>
+                <Text style={{ fontSize: 10, color: colors.textDim }}>WEEK LOGGED</Text>
+              </View>
+              <View>
+                <Text style={{ fontSize: 18, fontWeight: '800', color: colors.primary }}>
+                  {(viewedSubmission?.billableHours || (viewedMember.weeklyLoggedHours || 36) * 0.92).toFixed(1)}h
+                </Text>
+                <Text style={{ fontSize: 10, color: colors.textDim }}>BILLABLE</Text>
+              </View>
+              {viewedSubmission && viewedSubmission.status === 'submitted' ? (
+                <TouchableOpacity
+                  style={[styles.approveDirectBtn, { backgroundColor: '#10B981' }]}
+                  onPress={async () => {
+                    await approveSubmission(viewedSubmission.id);
+                    Alert.alert('Approved', `${viewedMember.firstName}'s timesheet has been approved.`);
+                  }}
+                >
+                  <CheckCheck color="#FFFFFF" size={14} />
+                  <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '700' }}>Approve Week</Text>
+                </TouchableOpacity>
+              ) : (
+                <View style={[styles.memberStatusPill, { backgroundColor: colors.surfaceSubtle }]}>
+                  <Text style={{ fontSize: 11, fontWeight: '700', color: colors.textMuted, textTransform: 'uppercase' }}>
+                    {viewedSubmission?.status || 'active'}
+                  </Text>
+                </View>
+              )}
+            </View>
+
+            {viewedSubmission?.breakdown && viewedSubmission.breakdown.length > 0 && (
+              <View style={{ marginTop: 10, gap: 6 }}>
+                {viewedSubmission.breakdown.map((b, i) => (
+                  <View key={i} style={[styles.memberBreakRow, { backgroundColor: colors.surfaceSubtle }]}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontSize: 12, fontWeight: '700', color: colors.text }}>{b.projectName}</Text>
+                      <Text style={{ fontSize: 11, color: colors.textMuted }}>{b.taskName}</Text>
+                    </View>
+                    <Text style={{ fontSize: 13, fontWeight: '800', color: colors.primary }}>{b.hours}h</Text>
+                  </View>
+                ))}
+              </View>
+            )}
+          </View>
+        )}
 
         {/* Submission Status Banner */}
         <View
@@ -301,10 +467,14 @@ export default function WeekScreen() {
           <View style={styles.summaryMetricsRow}>
             <View style={styles.metricItem}>
               <Text style={[styles.metricValue, { color: colors.text }]}>
-                {viewMode === 'day' ? dayTotalHours.toFixed(1) : weekTotalHours.toFixed(1)}h
+                {viewMode === 'day'
+                  ? dayTotalHours.toFixed(1)
+                  : viewMode === 'month'
+                  ? monthTotalHours.toFixed(1)
+                  : weekTotalHours.toFixed(1)}h
               </Text>
               <Text style={[styles.metricLabel, { color: colors.textDim }]}>
-                {viewMode === 'day' ? 'Day Hours' : 'Week Total'}
+                {viewMode === 'day' ? 'Day Hours' : viewMode === 'month' ? 'Month Total' : 'Week Total'}
               </Text>
             </View>
             <View style={[styles.metricDivider, { backgroundColor: colors.borderSubtle }]} />
@@ -317,10 +487,12 @@ export default function WeekScreen() {
               <Text style={[styles.metricValue, { color: colors.text }]}>
                 {viewMode === 'day'
                   ? Math.max(0, 8.0 - dayTotalHours).toFixed(1)
+                  : viewMode === 'month'
+                  ? Math.max(0, 160.0 - monthTotalHours).toFixed(1)
                   : Math.max(0, 40.0 - weekTotalHours).toFixed(1)}h
               </Text>
               <Text style={[styles.metricLabel, { color: colors.textDim }]}>
-                {viewMode === 'day' ? 'To 8h Target' : 'To 40h Target'}
+                {viewMode === 'day' ? 'To 8h Target' : viewMode === 'month' ? 'To 160h Target' : 'To 40h Target'}
               </Text>
             </View>
           </View>
@@ -334,7 +506,11 @@ export default function WeekScreen() {
                   backgroundColor: colors.primary,
                   width: `${Math.min(
                     100,
-                    viewMode === 'day' ? (dayTotalHours / 8.0) * 100 : (weekTotalHours / 40.0) * 100
+                    viewMode === 'day'
+                      ? (dayTotalHours / 8.0) * 100
+                      : viewMode === 'month'
+                      ? (monthTotalHours / 160.0) * 100
+                      : (weekTotalHours / 40.0) * 100
                   )}%`,
                 },
               ]}
@@ -342,97 +518,131 @@ export default function WeekScreen() {
           </View>
         </View>
 
-        {/* Day Selector Pills Bar (Shown in both Week and Day mode) */}
-        <Text style={[styles.filterSectionTitle, { color: colors.textDim }]}>
-          {viewMode === 'day' ? 'SELECT DAY TO VIEW' : 'FILTER BY DAY'}
-        </Text>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={styles.daySelectorScroll}
-          contentContainerStyle={styles.daySelectorContent}
-        >
-          {viewMode === 'week' && (
-            <TouchableOpacity
-              style={[
-                styles.dayPill,
-                {
-                  backgroundColor: selectedDayId === 'all' ? `${colors.primary}18` : colors.surface,
-                  borderColor: selectedDayId === 'all' ? colors.primary : colors.borderSubtle,
-                },
-              ]}
-              onPress={() => setSelectedDayId('all')}
-              activeOpacity={0.7}
-            >
-              <Text
-                style={[
-                  styles.dayLabel,
-                  { color: selectedDayId === 'all' ? colors.primary : colors.textMuted },
-                ]}
-              >
-                All
-              </Text>
-              <Text
-                style={[
-                  styles.dayHours,
-                  { color: selectedDayId === 'all' ? colors.primary : colors.text },
-                ]}
-              >
-                {weekTotalHours.toFixed(1)}h
-              </Text>
-            </TouchableOpacity>
-          )}
+        {/* Month View Project Summary Cards */}
+        {viewMode === 'month' && monthProjectGroups.length > 0 && (
+          <View style={{ marginBottom: Spacing.md }}>
+            <Text style={[styles.filterSectionTitle, { color: colors.textDim }]}>
+              MONTH BREAKDOWN BY PROJECT
+            </Text>
+            <View style={[styles.monthSummaryCard, { backgroundColor: colors.surface, borderColor: colors.borderSubtle }]}>
+              {monthProjectGroups.map((pg, idx) => (
+                <View
+                  key={pg.projectName}
+                  style={[
+                    styles.monthProjRow,
+                    idx > 0 && { borderTopWidth: 1, borderTopColor: colors.borderSubtle },
+                  ]}
+                >
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 13, fontWeight: '700', color: colors.text }}>{pg.projectName}</Text>
+                    <Text style={{ fontSize: 11, color: colors.textMuted }}>
+                      {pg.clientName} · {pg.count} {pg.count === 1 ? 'entry' : 'entries'}
+                    </Text>
+                  </View>
+                  <Text style={{ fontSize: 14, fontWeight: '800', color: colors.primary }}>{pg.hours.toFixed(2)}h</Text>
+                </View>
+              ))}
+            </View>
+          </View>
+        )}
 
-          {weekDates.map((day) => {
-            const isSelected = viewMode === 'day' ? activeDayDate === day.id : selectedDayId === day.id;
-            const hours = dailyTotals[day.id] || 0;
-            return (
-              <TouchableOpacity
-                key={day.id}
-                style={[
-                  styles.dayPill,
-                  {
-                    backgroundColor: isSelected ? `${colors.primary}18` : colors.surface,
-                    borderColor: isSelected ? colors.primary : colors.borderSubtle,
-                  },
-                ]}
-                onPress={() => {
-                  setSelectedDayId(day.id);
-                }}
-                activeOpacity={0.7}
-              >
-                <View style={styles.dayPillHeader}>
+        {/* Day Selector Pills Bar (Shown in Week and Day modes) */}
+        {viewMode !== 'month' && (
+          <>
+            <Text style={[styles.filterSectionTitle, { color: colors.textDim }]}>
+              {viewMode === 'day' ? 'SELECT DAY TO VIEW' : 'FILTER BY DAY'}
+            </Text>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={styles.daySelectorScroll}
+              contentContainerStyle={styles.daySelectorContent}
+            >
+              {viewMode === 'week' && (
+                <TouchableOpacity
+                  style={[
+                    styles.dayPill,
+                    {
+                      backgroundColor: selectedDayId === 'all' ? `${colors.primary}18` : colors.surface,
+                      borderColor: selectedDayId === 'all' ? colors.primary : colors.borderSubtle,
+                    },
+                  ]}
+                  onPress={() => setSelectedDayId('all')}
+                  activeOpacity={0.7}
+                >
                   <Text
                     style={[
                       styles.dayLabel,
-                      { color: isSelected ? colors.primary : colors.textMuted },
+                      { color: selectedDayId === 'all' ? colors.primary : colors.textMuted },
                     ]}
                   >
-                    {day.label}
+                    All
                   </Text>
-                  {day.isToday && (
-                    <View style={[styles.todayIndicatorDot, { backgroundColor: colors.primary }]} />
-                  )}
-                </View>
-                <Text style={[styles.dayDateStr, { color: colors.textDim }]}>{day.dateStr}</Text>
-                <Text
-                  style={[
-                    styles.dayHours,
-                    { color: isSelected ? colors.primary : colors.text },
-                  ]}
-                >
-                  {hours > 0 ? `${hours.toFixed(1)}h` : '–'}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
+                  <Text
+                    style={[
+                      styles.dayHours,
+                      { color: selectedDayId === 'all' ? colors.primary : colors.text },
+                    ]}
+                  >
+                    {weekTotalHours.toFixed(1)}h
+                  </Text>
+                </TouchableOpacity>
+              )}
+
+              {weekDates.map((day) => {
+                const isSelected = viewMode === 'day' ? activeDayDate === day.id : selectedDayId === day.id;
+                const hours = dailyTotals[day.id] || 0;
+                return (
+                  <TouchableOpacity
+                    key={day.id}
+                    style={[
+                      styles.dayPill,
+                      {
+                        backgroundColor: isSelected ? `${colors.primary}18` : colors.surface,
+                        borderColor: isSelected ? colors.primary : colors.borderSubtle,
+                      },
+                    ]}
+                    onPress={() => {
+                      setSelectedDayId(day.id);
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <View style={styles.dayPillHeader}>
+                      <Text
+                        style={[
+                          styles.dayLabel,
+                          { color: isSelected ? colors.primary : colors.textMuted },
+                        ]}
+                      >
+                        {day.label}
+                      </Text>
+                      {day.isToday && (
+                        <View style={[styles.todayIndicatorDot, { backgroundColor: colors.primary }]} />
+                      )}
+                    </View>
+                    <Text style={[styles.dayDateStr, { color: colors.textDim }]}>{day.dateStr}</Text>
+                    <Text
+                      style={[
+                        styles.dayHours,
+                        { color: isSelected ? colors.primary : colors.text },
+                      ]}
+                    >
+                      {hours > 0 ? `${hours.toFixed(1)}h` : '–'}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </>
+        )}
 
         {/* Entries Header */}
         <View style={styles.entriesSectionHeader}>
           <View>
             <Text style={[styles.entriesSectionTitle, { color: colors.text }]}>
-              {viewMode === 'day'
+              {viewMode === 'month'
+                ? `${activeMonthLabel} Entries`
+                : viewMode === 'day'
                 ? `Entries for ${activeDayDate}`
                 : selectedDayId === 'all'
                 ? 'All Week Entries'
@@ -496,9 +706,12 @@ export default function WeekScreen() {
           </View>
         ) : (
           displayedEntries.map((entry, idx) => (
-            <View
+            <TouchableOpacity
               key={entry.id || idx}
-              style={[styles.entryCard, { backgroundColor: colors.surface, borderColor: colors.borderSubtle }]}>
+              activeOpacity={0.75}
+              onPress={() => handleEditEntry(entry)}
+              style={[styles.entryCard, { backgroundColor: colors.surface, borderColor: colors.borderSubtle }]}
+            >
               <View style={styles.entryHeader}>
                 <View style={styles.entryProjectInfo}>
                   <Text style={[styles.entryProjectName, { color: colors.text }]}>{entry.projectName}</Text>
@@ -524,29 +737,45 @@ export default function WeekScreen() {
                     <Lock color={colors.textDim} size={13} strokeWidth={2} />
                   </View>
                 ) : (
-                  <TouchableOpacity
-                    style={styles.deleteBtn}
-                    onPress={() =>
-                      handleDeleteEntry(entry.id || String(idx), entry.projectName || 'Project', entry.hours)
-                    }
-                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  >
-                    <Trash2 color={colors.textDim} size={15} />
-                  </TouchableOpacity>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                    <Edit3 color={colors.textDim} size={14} />
+                    <TouchableOpacity
+                      style={styles.deleteBtn}
+                      onPress={() =>
+                        handleDeleteEntry(entry.id || String(idx), entry.projectName || 'Project', entry.hours)
+                      }
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    >
+                      <Trash2 color={colors.textDim} size={15} />
+                    </TouchableOpacity>
+                  </View>
                 )}
               </View>
-            </View>
+            </TouchableOpacity>
           ))
         )}
       </ScrollView>
 
-      {/* Manual Entry Modal */}
+      {/* Manual Entry / Edit Modal */}
       <ManualEntryModal
         visible={manualModalVisible}
-        onClose={() => setManualModalVisible(false)}
+        onClose={() => {
+          setManualModalVisible(false);
+          setEditingEntry(null);
+        }}
         initialDate={targetDateForEntry}
-        onSave={async (date, projectId, taskId, hours, note) => {
-          await logManualEntry(date, projectId, taskId, hours, note);
+        initialEntry={editingEntry}
+        onDeleteEntry={async (id) => {
+          await deleteEntry(id);
+          setEditingEntry(null);
+        }}
+        onSave={async (date, projectId, taskId, hours, note, existingId) => {
+          if (existingId) {
+            await updateEntry(existingId, { date, projectId, taskId, hours, note });
+          } else {
+            await logManualEntry(date, projectId, taskId, hours, note);
+          }
+          setEditingEntry(null);
           setManualModalVisible(false);
         }}
         projects={projects}
@@ -839,5 +1068,69 @@ const styles = StyleSheet.create({
   },
   deleteBtn: {
     padding: 2,
+  },
+  employeeChip: {
+    paddingVertical: 6,
+    paddingHorizontal: 11,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+  },
+  employeeChipText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  teamInspectCard: {
+    borderRadius: Radius.md,
+    borderWidth: 1.5,
+    padding: Spacing.md,
+    marginBottom: Spacing.sm,
+  },
+  teamInspectTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  resetEmployeeBtn: {
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderRadius: Radius.sm,
+  },
+  teamInspectStats: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: Spacing.md,
+    paddingTop: Spacing.md,
+    borderTopWidth: 1,
+  },
+  approveDirectBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingVertical: 7,
+    paddingHorizontal: 12,
+    borderRadius: Radius.sm,
+  },
+  memberStatusPill: {
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderRadius: Radius.sm,
+  },
+  memberBreakRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 8,
+    borderRadius: Radius.xs,
+  },
+  monthSummaryCard: {
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    overflow: 'hidden',
+  },
+  monthProjRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: Spacing.md,
   },
 });

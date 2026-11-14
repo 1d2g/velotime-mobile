@@ -11,6 +11,7 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
+  Share,
 } from 'react-native';
 import {
   BarChart3,
@@ -34,20 +35,37 @@ import {
   Unlock,
   AlertTriangle,
   AlertOctagon,
+  Share2,
+  ShieldCheck,
+  Plus,
+  Send,
+  Trash2,
 } from 'lucide-react-native';
 import { useManager, ReportTimeframe } from '@/src/context/ManagerContext';
+import { useTimesheet } from '@/src/context/TimesheetContext';
+import { useExpenses } from '@/src/context/ExpenseContext';
 import { useAuth } from '@/src/context/AuthContext';
 import { useTheme } from '@/src/context/ThemeContext';
 import { Spacing, Radius } from '@/src/constants/theme';
-import { TimesheetSubmission, TeamMember } from '@/src/services/api';
+import { TimesheetSubmission, TeamMember, Invoice, getLocalDateString } from '@/src/services/api';
 
 type ManagerSubTab = 'dashboard' | 'approvals' | 'reports' | 'team';
+type ReportPreset = 'profitability' | 'clients' | 'utilization' | 'uninvoiced' | 'audit_log';
+
+const REPORT_PRESETS: { id: ReportPreset; label: string }[] = [
+  { id: 'profitability', label: 'Project Profitability' },
+  { id: 'clients', label: 'Client Revenue' },
+  { id: 'utilization', label: 'Team Utilization' },
+  { id: 'uninvoiced', label: 'Uninvoiced Ledger' },
+  { id: 'audit_log', label: 'Audit Log' },
+];
 
 export default function ManagerScreen() {
-  const { colors, isDark } = useTheme();
-  const { previewRole, setPreviewRole } = useAuth();
+  const { colors } = useTheme();
+  const { orgSettings } = useAuth();
+  const { projects, entries } = useTimesheet();
+  const { expenses } = useExpenses();
   const {
-    submissions,
     pendingSubmissions,
     pastSubmissions,
     teamMembers,
@@ -58,6 +76,12 @@ export default function ManagerScreen() {
     rejectSubmission,
     unlockSubmission,
     updateTeamMemberRates,
+    addTeamMember,
+    updateTeamMember,
+    removeTeamMember,
+    createInvoice,
+    updateInvoiceStatus,
+    deleteInvoice,
     metrics,
     projectBreakdowns,
     teamBreakdowns,
@@ -65,6 +89,7 @@ export default function ManagerScreen() {
   } = useManager();
 
   const [activeSubTab, setActiveSubTab] = useState<ManagerSubTab>('dashboard');
+  const [reportPreset, setReportPreset] = useState<ReportPreset>('profitability');
   const [expandedSubmissionId, setExpandedSubmissionId] = useState<string | null>(null);
 
   // Reject Modal State
@@ -72,11 +97,37 @@ export default function ManagerScreen() {
   const [selectedSubForReject, setSelectedSubForReject] = useState<TimesheetSubmission | null>(null);
   const [rejectNote, setRejectNote] = useState('');
 
-  // Rate Edit Modal State
+  // Team Member Modal State (Edit Rates / Invite Member)
   const [rateModalVisible, setRateModalVisible] = useState(false);
   const [selectedMemberForRate, setSelectedMemberForRate] = useState<TeamMember | null>(null);
   const [editBillingRate, setEditBillingRate] = useState('');
   const [editCostRate, setEditCostRate] = useState('');
+
+  const [memberModalVisible, setMemberModalVisible] = useState(false);
+  const [editingMember, setEditingMember] = useState<TeamMember | null>(null);
+  const [mFirstName, setMFirstName] = useState('');
+  const [mLastName, setMLastName] = useState('');
+  const [mEmail, setMEmail] = useState('');
+  const [mRole, setMRole] = useState<'admin' | 'manager' | 'employee'>('employee');
+  const [mCapacity, setMCapacity] = useState('40');
+  const [mBillRate, setMBillRate] = useState('165');
+  const [mCostRate, setMCostRate] = useState('65');
+
+  // Create Invoice Modal State
+  const [invoiceModalVisible, setInvoiceModalVisible] = useState(false);
+  const [invProjectId, setInvProjectId] = useState(projects[0]?.id || 'p1');
+  const [invBillingMode, setInvBillingMode] = useState<'hourly' | 'progress' | 'expense' | 'flat'>('hourly');
+  const [invCustomAmount, setInvCustomAmount] = useState('4800');
+  const [invTaxRate, setInvTaxRate] = useState(String(orgSettings.defaultTaxRate || 0));
+  const [invDueDate, setInvDueDate] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 30);
+    return getLocalDateString(d);
+  });
+  const [invNotes, setInvNotes] = useState('');
+
+  // Client Audit Proof Modal State
+  const [auditInvoice, setAuditInvoice] = useState<Invoice | null>(null);
 
   const formatCurrency = (val: number) => {
     return '$' + val.toLocaleString('en-US', { maximumFractionDigits: 0 });
@@ -117,6 +168,176 @@ export default function ManagerScreen() {
     await updateTeamMemberRates(selectedMemberForRate.id, cRate, bRate);
     setRateModalVisible(false);
     setSelectedMemberForRate(null);
+  };
+
+  const handleOpenAddMember = () => {
+    setEditingMember(null);
+    setMFirstName('');
+    setMLastName('');
+    setMEmail('');
+    setMRole('employee');
+    setMCapacity('40');
+    setMBillRate('165');
+    setMCostRate('65');
+    setMemberModalVisible(true);
+  };
+
+  const handleOpenEditMember = (m: TeamMember) => {
+    setEditingMember(m);
+    setMFirstName(m.firstName);
+    setMLastName(m.lastName);
+    setMEmail(m.email);
+    setMRole(m.role);
+    setMCapacity(String(m.capacityHours || 40));
+    setMBillRate(String(m.defaultBillingRate || 165));
+    setMCostRate(String(m.defaultCostRate || 65));
+    setMemberModalVisible(true);
+  };
+
+  const handleSaveMember = async () => {
+    if (!mFirstName.trim() || !mEmail.trim()) {
+      Alert.alert('Missing Details', 'First name and work email are required.');
+      return;
+    }
+    const payload = {
+      firstName: mFirstName.trim(),
+      lastName: mLastName.trim() || 'Member',
+      email: mEmail.trim().toLowerCase(),
+      role: mRole,
+      capacityHours: parseFloat(mCapacity) || 40,
+      defaultBillingRate: parseFloat(mBillRate) || 165,
+      defaultCostRate: parseFloat(mCostRate) || 65,
+    };
+    if (editingMember) {
+      await updateTeamMember(editingMember.id, payload);
+    } else {
+      await addTeamMember({ ...payload, weeklyLoggedHours: 0 });
+    }
+    setMemberModalVisible(false);
+    setEditingMember(null);
+  };
+
+  const selectedInvoiceProject = projects.find((p) => p.id === invProjectId) || projects[0];
+  const selectedInvoiceProjStats = projectBreakdowns.find((pb) => pb.id === selectedInvoiceProject?.id);
+
+  const computedInvoiceDraft = React.useMemo(() => {
+    const baseHourlyRevenue = selectedInvoiceProjStats?.revenue || (selectedInvoiceProject?.hourlyRate || 165) * 20;
+    const baseHours = selectedInvoiceProjStats?.billableHours || 20;
+    const projExpenses = expenses
+      .filter((ex) => ex.projectId === selectedInvoiceProject?.id && ex.isBillable)
+      .reduce((s, ex) => s + ex.amount, 0);
+
+    let subtotal = baseHourlyRevenue;
+    let hours = baseHours;
+    if (invBillingMode === 'progress') {
+      subtotal = Math.round((selectedInvoiceProject?.budget || baseHourlyRevenue) * 0.25);
+      hours = Math.round(baseHours * 0.5 * 10) / 10;
+    } else if (invBillingMode === 'expense') {
+      subtotal = Math.round((baseHourlyRevenue + projExpenses) * 100) / 100;
+    } else if (invBillingMode === 'flat') {
+      subtotal = parseFloat(invCustomAmount) || 0;
+      hours = 0;
+    }
+    const taxPct = Math.max(0, parseFloat(invTaxRate) || 0);
+    const total = Math.round(subtotal * (1 + taxPct / 100) * 100) / 100;
+    return { subtotal, hours, total, projExpenses };
+  }, [selectedInvoiceProject, selectedInvoiceProjStats, expenses, invBillingMode, invCustomAmount, invTaxRate]);
+
+  const handleOpenCreateInvoice = () => {
+    setInvProjectId(projects[0]?.id || 'p1');
+    setInvBillingMode('hourly');
+    setInvCustomAmount('4800');
+    setInvTaxRate(String(orgSettings.defaultTaxRate || 0));
+    setInvNotes('Net 30 payment terms. Verified via VeloTime Audit Log.');
+    setInvoiceModalVisible(true);
+  };
+
+  const handleSaveNewInvoice = async () => {
+    if (!selectedInvoiceProject) return;
+    if (computedInvoiceDraft.total <= 0) {
+      Alert.alert('Invalid Amount', 'Invoice total must be greater than $0.');
+      return;
+    }
+    const invoiceNumber = `${orgSettings.invoicePrefix || 'INV-2026-'}${orgSettings.nextInvoiceNumber || invoices.length + 101}`;
+    await createInvoice({
+      invoiceNumber,
+      clientName: selectedInvoiceProject.clientName || 'General Client',
+      projectName: selectedInvoiceProject.name,
+      amount: computedInvoiceDraft.total,
+      status: 'draft',
+      issueDate: getLocalDateString(),
+      dueDate: invDueDate || getLocalDateString(),
+      totalHours: computedInvoiceDraft.hours,
+      billingMode: invBillingMode,
+      taxRate: parseFloat(invTaxRate) || 0,
+      notes: invNotes.trim(),
+    });
+    setInvoiceModalVisible(false);
+  };
+
+  const handleExportReportCSV = async () => {
+    let lines: string[] = [];
+    let title = 'VeloTime Report';
+
+    if (reportPreset === 'profitability') {
+      title = 'Project Profitability Report';
+      lines.push('Project,Client,Hours,BillableHours,Revenue,LaborCost,Profit,MarginPct');
+      projectBreakdowns.forEach((p) => {
+        lines.push(`"${p.name}","${p.clientName}",${p.hours},${p.billableHours},${p.revenue},${p.costAmount},${p.profitAmount},${p.marginPercent}%`);
+      });
+    } else if (reportPreset === 'clients') {
+      title = 'Client Revenue Report';
+      lines.push('Client,ActiveProjects,Hours,Revenue');
+      clientBreakdowns.forEach((c) => {
+        lines.push(`"${c.clientName}",${c.projectCount},${c.hours},${c.revenue}`);
+      });
+    } else if (reportPreset === 'utilization') {
+      title = 'Team Utilization Report';
+      lines.push('Member,Role,CapacityHours,LoggedHours,BillableHours,UtilizationPct,Revenue');
+      teamBreakdowns.forEach((t) => {
+        lines.push(`"${t.name}","${t.role}",${t.capacity},${t.hours},${t.billableHours},${t.utilizationPct}%,${t.revenue}`);
+      });
+    } else if (reportPreset === 'uninvoiced') {
+      title = 'Uninvoiced WIP & Expenses Ledger';
+      lines.push('Category,Item,Client,Amount');
+      lines.push(`"Uninvoiced Labor","Ready to Invoice Hours","All Clients",${Math.max(0, metrics.uninvoicedAmount - metrics.uninvoicedExpenseAmount)}`);
+      expenses
+        .filter((e) => e.isBillable && e.status !== 'invoiced')
+        .forEach((e) => {
+          lines.push(`"Billable Expense","${e.description}","${e.clientName || 'General'}",${e.amount}`);
+        });
+    } else {
+      title = 'Detailed Time Entry Audit Log';
+      lines.push('Date,Project,Task,Client,Hours,Billable,Note');
+      entries.forEach((e) => {
+        lines.push(`${e.date},"${e.projectName || ''}","${e.taskName || ''}","${e.clientName || ''}",${e.hours},${e.isBillable !== false ? 'Yes' : 'No'},"${(e.note || '').replace(/"/g, '""')}"`);
+      });
+    }
+
+    try {
+      await Share.share({
+        title,
+        message: lines.join('\n'),
+      });
+    } catch {}
+  };
+
+  const handleShareClientProof = async (inv: Invoice) => {
+    const hash = inv.auditHash || `VT-PROOF-${inv.invoiceNumber}`;
+    const summary = [
+      `VELOTIME CLIENT AUDIT PROOF`,
+      `Organization: ${orgSettings.orgName}`,
+      `Invoice: ${inv.invoiceNumber} (${inv.status.toUpperCase()})`,
+      `Client: ${inv.clientName}`,
+      `Project: ${inv.projectName}`,
+      `Total Verified Hours: ${(inv.totalHours || 0).toFixed(1)}h`,
+      `Total Amount: $${inv.amount.toLocaleString()}`,
+      `Issue Date: ${inv.issueDate} | Due: ${inv.dueDate}`,
+      `Audit Verification Hash: ${hash}`,
+    ].join('\n');
+    try {
+      await Share.share({ title: `Audit Proof ${inv.invoiceNumber}`, message: summary });
+    } catch {}
   };
 
   return (
@@ -626,6 +847,52 @@ export default function ManagerScreen() {
         {/* ========================================================================= */}
         {activeSubTab === 'reports' && (
           <View>
+            {/* Report Header + Export CSV */}
+            <View style={[styles.sectionHeaderRow, { marginTop: 0, marginBottom: Spacing.sm }]}>
+              <Text style={[styles.sectionHeading, { color: colors.text }]}>Executive Reports</Text>
+              <TouchableOpacity
+                style={[styles.exportCsvBtn, { backgroundColor: colors.primaryMuted, borderColor: colors.primary }]}
+                onPress={handleExportReportCSV}
+              >
+                <Share2 color={colors.primary} size={13} />
+                <Text style={[styles.exportCsvText, { color: colors.primary }]}>Export CSV</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Report Preset Pills */}
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={{ marginBottom: Spacing.sm }}
+              contentContainerStyle={{ gap: 6 }}
+            >
+              {REPORT_PRESETS.map((preset) => {
+                const active = reportPreset === preset.id;
+                return (
+                  <TouchableOpacity
+                    key={preset.id}
+                    style={[
+                      styles.presetPill,
+                      {
+                        backgroundColor: active ? colors.primaryMuted : colors.surface,
+                        borderColor: active ? colors.primary : colors.borderSubtle,
+                      },
+                    ]}
+                    onPress={() => setReportPreset(preset.id)}
+                  >
+                    <Text
+                      style={[
+                        styles.presetPillText,
+                        { color: active ? colors.primary : colors.textMuted },
+                      ]}
+                    >
+                      {preset.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+
             {/* Timeframe Selector */}
             <View style={styles.timeframeRow}>
               {(['week', 'last_week', 'month', 'all'] as ReportTimeframe[]).map((tf) => {
@@ -688,135 +955,242 @@ export default function ManagerScreen() {
                   Billable: <Text style={{ color: colors.text, fontWeight: '700' }}>{metrics.totalBillableHours.toFixed(1)}h</Text>
                 </Text>
                 <Text style={[styles.legendItem, { color: colors.textMuted }]}>
-                  Internal: <Text style={{ color: colors.text, fontWeight: '700' }}>{(metrics.totalTeamHours - metrics.totalBillableHours).toFixed(1)}h</Text>
+                  Internal: <Text style={{ color: colors.text, fontWeight: '700' }}>{Math.max(0, metrics.totalTeamHours - metrics.totalBillableHours).toFixed(1)}h</Text>
                 </Text>
               </View>
             </View>
 
-            {/* Project Financial Breakdown */}
-            <Text style={[styles.reportSectionTitle, { color: colors.text }]}>Hours & Revenue by Project</Text>
-            {projectBreakdowns.map((proj) => (
-              <View
-                key={proj.id}
-                style={[
-                  styles.reportCard,
-                  { backgroundColor: colors.surface, borderColor: colors.borderSubtle },
-                ]}
-              >
-                <View style={styles.reportCardTop}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.reportCardTitle, { color: colors.text }]}>{proj.name}</Text>
-                    <Text style={[styles.reportCardSub, { color: colors.textMuted }]}>{proj.clientName}</Text>
-                  </View>
-                  <View style={{ alignItems: 'flex-end' }}>
-                    <Text style={[styles.reportCardAmount, { color: colors.primary }]}>
-                      {formatCurrency(proj.revenue)}
-                    </Text>
-                    <Text style={[styles.reportCardHours, { color: colors.textMuted }]}>
-                      {proj.hours.toFixed(1)} hrs
-                    </Text>
-                  </View>
-                </View>
-                <View style={[styles.progressTrack, { backgroundColor: colors.surfaceSubtle, marginTop: 6 }]}>
+            {/* Preset 1: Project Profitability */}
+            {reportPreset === 'profitability' && (
+              <>
+                <Text style={[styles.reportSectionTitle, { color: colors.text }]}>
+                  Project Profitability & Margins
+                </Text>
+                {projectBreakdowns.map((proj) => (
                   <View
+                    key={proj.id}
                     style={[
-                      styles.progressFill,
-                      { width: `${Math.min(100, proj.budgetPct)}%`, backgroundColor: colors.primary },
+                      styles.reportCard,
+                      { backgroundColor: colors.surface, borderColor: colors.borderSubtle },
                     ]}
-                  />
-                </View>
-                {Boolean(proj.alertMessage) && (
-                  <View
-                    style={{
-                      flexDirection: 'row',
-                      alignItems: 'center',
-                      gap: 6,
-                      marginTop: 8,
-                      padding: 6,
-                      backgroundColor: proj.riskLevel === 'critical' ? '#E11D4818' : '#F59E0B18',
-                      borderColor: proj.riskLevel === 'critical' ? '#E11D4840' : '#F59E0B40',
-                      borderWidth: 1,
-                    }}
                   >
-                    {proj.riskLevel === 'critical' ? (
-                      <AlertOctagon size={13} color="#E11D48" />
-                    ) : (
-                      <AlertTriangle size={13} color="#D97706" />
+                    <View style={styles.reportCardTop}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.reportCardTitle, { color: colors.text }]}>{proj.name}</Text>
+                        <Text style={[styles.reportCardSub, { color: colors.textMuted }]}>
+                          {proj.clientName} · Margin {proj.marginPercent}% ({formatCurrency(proj.profitAmount)})
+                        </Text>
+                      </View>
+                      <View style={{ alignItems: 'flex-end' }}>
+                        <Text style={[styles.reportCardAmount, { color: colors.primary }]}>
+                          {formatCurrency(proj.revenue)}
+                        </Text>
+                        <Text style={[styles.reportCardHours, { color: colors.textMuted }]}>
+                          {proj.hours.toFixed(1)} hrs · Cost {formatCurrency(proj.costAmount)}
+                        </Text>
+                      </View>
+                    </View>
+                    <View style={[styles.progressTrack, { backgroundColor: colors.surfaceSubtle, marginTop: 6 }]}>
+                      <View
+                        style={[
+                          styles.progressFill,
+                          { width: `${Math.min(100, proj.budgetPct)}%`, backgroundColor: colors.primary },
+                        ]}
+                      />
+                    </View>
+                    {Boolean(proj.alertMessage) && (
+                      <View
+                        style={{
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          gap: 6,
+                          marginTop: 8,
+                          padding: 6,
+                          backgroundColor: proj.riskLevel === 'critical' ? '#E11D4818' : '#F59E0B18',
+                          borderColor: proj.riskLevel === 'critical' ? '#E11D4840' : '#F59E0B40',
+                          borderWidth: 1,
+                        }}
+                      >
+                        {proj.riskLevel === 'critical' ? (
+                          <AlertOctagon size={13} color="#E11D48" />
+                        ) : (
+                          <AlertTriangle size={13} color="#D97706" />
+                        )}
+                        <Text
+                          style={{
+                            flex: 1,
+                            fontSize: 10,
+                            fontWeight: '600',
+                            color: proj.riskLevel === 'critical' ? '#E11D48' : '#B45309',
+                          }}
+                        >
+                          {proj.alertMessage}
+                        </Text>
+                      </View>
                     )}
-                    <Text
-                      style={{
-                        flex: 1,
-                        fontSize: 10,
-                        fontWeight: '600',
-                        color: proj.riskLevel === 'critical' ? '#E11D48' : '#B45309',
-                      }}
-                    >
-                      {proj.alertMessage}
-                    </Text>
                   </View>
-                )}
-              </View>
-            ))}
+                ))}
+              </>
+            )}
 
-            {/* Team Utilization Breakdown */}
-            <Text style={[styles.reportSectionTitle, { color: colors.text, marginTop: Spacing.xl }]}>
-              Team Member Utilization & Revenue
-            </Text>
-            {teamBreakdowns.map((tm) => (
-              <View
-                key={tm.id}
-                style={[
-                  styles.reportCard,
-                  { backgroundColor: colors.surface, borderColor: colors.borderSubtle },
-                ]}
-              >
-                <View style={styles.reportCardTop}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.reportCardTitle, { color: colors.text }]}>{tm.name}</Text>
-                    <Text style={[styles.reportCardSub, { color: colors.textMuted }]}>{tm.role}</Text>
+            {/* Preset 2: Client Revenue */}
+            {reportPreset === 'clients' && (
+              <>
+                <Text style={[styles.reportSectionTitle, { color: colors.text }]}>
+                  Client Accounts Revenue Summary
+                </Text>
+                {clientBreakdowns.map((cl, idx) => (
+                  <View
+                    key={idx}
+                    style={[
+                      styles.reportCard,
+                      { backgroundColor: colors.surface, borderColor: colors.borderSubtle },
+                    ]}
+                  >
+                    <View style={styles.reportCardTop}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.reportCardTitle, { color: colors.text }]}>{cl.clientName}</Text>
+                        <Text style={[styles.reportCardSub, { color: colors.textMuted }]}>
+                          {cl.projectCount} active project{cl.projectCount === 1 ? '' : 's'}
+                        </Text>
+                      </View>
+                      <View style={{ alignItems: 'flex-end' }}>
+                        <Text style={[styles.reportCardAmount, { color: colors.primary }]}>
+                          {formatCurrency(cl.revenue)}
+                        </Text>
+                        <Text style={[styles.reportCardHours, { color: colors.textMuted }]}>
+                          {cl.hours.toFixed(1)} hrs · Avg ${cl.hours > 0 ? Math.round(cl.revenue / cl.hours) : 0}/hr
+                        </Text>
+                      </View>
+                    </View>
                   </View>
-                  <View style={{ alignItems: 'flex-end' }}>
-                    <Text style={[styles.reportCardAmount, { color: colors.text }]}>
-                      {formatCurrency(tm.revenue)}
-                    </Text>
-                    <Text style={[styles.reportCardHours, { color: colors.primary }]}>
-                      {tm.utilizationPct}% utilized ({tm.hours.toFixed(1)}h)
-                    </Text>
-                  </View>
-                </View>
-              </View>
-            ))}
+                ))}
+              </>
+            )}
 
-            {/* Client Account Breakdown */}
-            <Text style={[styles.reportSectionTitle, { color: colors.text, marginTop: Spacing.xl }]}>
-              Client Accounts Summary
-            </Text>
-            {clientBreakdowns.map((cl, idx) => (
-              <View
-                key={idx}
-                style={[
-                  styles.reportCard,
-                  { backgroundColor: colors.surface, borderColor: colors.borderSubtle },
-                ]}
-              >
-                <View style={styles.reportCardTop}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.reportCardTitle, { color: colors.text }]}>{cl.clientName}</Text>
-                    <Text style={[styles.reportCardSub, { color: colors.textMuted }]}>
-                      {cl.projectCount} active project{cl.projectCount === 1 ? '' : 's'}
-                    </Text>
+            {/* Preset 3: Team Utilization */}
+            {reportPreset === 'utilization' && (
+              <>
+                <Text style={[styles.reportSectionTitle, { color: colors.text }]}>
+                  Team Utilization & Labor Margin
+                </Text>
+                {teamBreakdowns.map((tm) => (
+                  <View
+                    key={tm.id}
+                    style={[
+                      styles.reportCard,
+                      { backgroundColor: colors.surface, borderColor: colors.borderSubtle },
+                    ]}
+                  >
+                    <View style={styles.reportCardTop}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.reportCardTitle, { color: colors.text }]}>{tm.name}</Text>
+                        <Text style={[styles.reportCardSub, { color: colors.textMuted }]}>
+                          {tm.role} · Cap {tm.capacity}h
+                        </Text>
+                      </View>
+                      <View style={{ alignItems: 'flex-end' }}>
+                        <Text style={[styles.reportCardAmount, { color: colors.text }]}>
+                          {formatCurrency(tm.revenue)}
+                        </Text>
+                        <Text style={[styles.reportCardHours, { color: colors.primary }]}>
+                          {tm.utilizationPct}% utilized ({tm.hours.toFixed(1)}h)
+                        </Text>
+                      </View>
+                    </View>
                   </View>
-                  <View style={{ alignItems: 'flex-end' }}>
+                ))}
+              </>
+            )}
+
+            {/* Preset 4: Uninvoiced Ledger */}
+            {reportPreset === 'uninvoiced' && (
+              <>
+                <Text style={[styles.reportSectionTitle, { color: colors.text }]}>
+                  Uninvoiced Billable Labor & Expenses ({formatCurrency(metrics.uninvoicedAmount)})
+                </Text>
+                <View style={[styles.reportCard, { backgroundColor: colors.surface, borderColor: colors.primary }]}>
+                  <View style={styles.reportCardTop}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.reportCardTitle, { color: colors.text }]}>Uninvoiced Billable Hours</Text>
+                      <Text style={[styles.reportCardSub, { color: colors.textMuted }]}>
+                        Net unbilled labor across active retainers
+                      </Text>
+                    </View>
                     <Text style={[styles.reportCardAmount, { color: colors.primary }]}>
-                      {formatCurrency(cl.revenue)}
-                    </Text>
-                    <Text style={[styles.reportCardHours, { color: colors.textMuted }]}>
-                      {cl.hours.toFixed(1)} hrs billed
+                      {formatCurrency(Math.max(0, metrics.uninvoicedAmount - metrics.uninvoicedExpenseAmount))}
                     </Text>
                   </View>
                 </View>
-              </View>
-            ))}
+
+                {expenses
+                  .filter((ex) => ex.isBillable && ex.status !== 'invoiced')
+                  .map((ex) => (
+                    <View
+                      key={ex.id}
+                      style={[
+                        styles.reportCard,
+                        { backgroundColor: colors.surface, borderColor: colors.borderSubtle },
+                      ]}
+                    >
+                      <View style={styles.reportCardTop}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={[styles.reportCardTitle, { color: colors.text }]}>{ex.description}</Text>
+                          <Text style={[styles.reportCardSub, { color: colors.textMuted }]}>
+                            {ex.clientName || 'General'} · {ex.date}
+                          </Text>
+                        </View>
+                        <Text style={[styles.reportCardAmount, { color: colors.text }]}>
+                          ${ex.amount.toFixed(2)}
+                        </Text>
+                      </View>
+                    </View>
+                  ))}
+              </>
+            )}
+
+            {/* Preset 5: Detailed Time Entry Audit Log */}
+            {reportPreset === 'audit_log' && (
+              <>
+                <Text style={[styles.reportSectionTitle, { color: colors.text }]}>
+                  Detailed Time Entry Audit Log ({entries.length})
+                </Text>
+                {entries.length === 0 ? (
+                  <View style={[styles.emptyCard, { backgroundColor: colors.surface, borderColor: colors.borderSubtle }]}>
+                    <Text style={[styles.emptyDesc, { color: colors.textMuted }]}>
+                      No live mobile entries logged yet.
+                    </Text>
+                  </View>
+                ) : (
+                  entries.map((e, i) => (
+                    <View
+                      key={e.id || i}
+                      style={[
+                        styles.reportCard,
+                        { backgroundColor: colors.surface, borderColor: colors.borderSubtle },
+                      ]}
+                    >
+                      <View style={styles.reportCardTop}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={[styles.reportCardTitle, { color: colors.text }]}>
+                            {e.projectName || 'Project'} — {e.taskName || 'Task'}
+                          </Text>
+                          <Text style={[styles.reportCardSub, { color: colors.textMuted }]}>
+                            {e.date} · {e.clientName || 'General'}
+                          </Text>
+                          {Boolean(e.note) && (
+                            <Text style={{ fontSize: 11, color: colors.textDim, marginTop: 3 }}>{e.note}</Text>
+                          )}
+                        </View>
+                        <Text style={[styles.reportCardAmount, { color: colors.primary }]}>
+                          {e.hours.toFixed(2)}h
+                        </Text>
+                      </View>
+                    </View>
+                  ))
+                )}
+              </>
+            )}
           </View>
         )}
 
@@ -827,8 +1201,15 @@ export default function ManagerScreen() {
           <View>
             <View style={styles.sectionHeaderRow}>
               <Text style={[styles.sectionHeading, { color: colors.text }]}>
-                Team Roster & Billable Rates ({teamMembers.length})
+                Team Roster & Rates ({teamMembers.length})
               </Text>
+              <TouchableOpacity
+                style={[styles.inlinePrimaryBtn, { backgroundColor: colors.primary }]}
+                onPress={handleOpenAddMember}
+              >
+                <Plus color="#FFFFFF" size={14} />
+                <Text style={styles.inlinePrimaryBtnText}>Invite Member</Text>
+              </TouchableOpacity>
             </View>
 
             {teamMembers.map((member) => {
@@ -838,8 +1219,10 @@ export default function ManagerScreen() {
                 : 0;
 
               return (
-                <View
+                <TouchableOpacity
                   key={member.id}
+                  activeOpacity={0.8}
+                  onPress={() => handleOpenEditMember(member)}
                   style={[
                     styles.teamCard,
                     { backgroundColor: colors.surface, borderColor: colors.borderSubtle },
@@ -856,7 +1239,7 @@ export default function ManagerScreen() {
                         {member.firstName} {member.lastName}
                       </Text>
                       <Text style={[styles.teamMemberEmail, { color: colors.textMuted }]}>
-                        {member.email}
+                        {member.email} · {member.role.toUpperCase()}
                       </Text>
                     </View>
                     <TouchableOpacity
@@ -883,7 +1266,7 @@ export default function ManagerScreen() {
                       <Text style={[styles.rateColVal, { color: colors.primary }]}>{marginPct}%</Text>
                     </View>
                   </View>
-                </View>
+                </TouchableOpacity>
               );
             })}
 
@@ -892,6 +1275,13 @@ export default function ManagerScreen() {
               <Text style={[styles.sectionHeading, { color: colors.text }]}>
                 Invoicing Pipeline ({invoices.length})
               </Text>
+              <TouchableOpacity
+                style={[styles.inlinePrimaryBtn, { backgroundColor: colors.primary }]}
+                onPress={handleOpenCreateInvoice}
+              >
+                <Plus color="#FFFFFF" size={14} />
+                <Text style={styles.inlinePrimaryBtnText}>New Invoice</Text>
+              </TouchableOpacity>
             </View>
 
             {invoices.map((inv) => {
@@ -930,7 +1320,51 @@ export default function ManagerScreen() {
                   <View style={[styles.invoiceMeta, { borderTopColor: colors.borderSubtle }]}>
                     <Text style={[styles.invoiceMetaText, { color: colors.textDim }]}>
                       Due: {inv.dueDate} • {inv.projectName}
+                      {inv.totalHours ? ` (${inv.totalHours.toFixed(1)}h)` : ''}
                     </Text>
+                  </View>
+                  <View style={styles.invoiceActionsRow}>
+                    <TouchableOpacity
+                      style={[styles.invActionBtn, { borderColor: colors.borderSubtle, backgroundColor: colors.surfaceSubtle }]}
+                      onPress={() => setAuditInvoice(inv)}
+                    >
+                      <ShieldCheck color={colors.primary} size={13} />
+                      <Text style={[styles.invActionText, { color: colors.text }]}>Client Proof</Text>
+                    </TouchableOpacity>
+
+                    {inv.status === 'draft' && (
+                      <TouchableOpacity
+                        style={[styles.invActionBtn, { borderColor: colors.primary, backgroundColor: colors.primaryMuted }]}
+                        onPress={() => updateInvoiceStatus(inv.id, 'sent')}
+                      >
+                        <Send color={colors.primary} size={13} />
+                        <Text style={[styles.invActionText, { color: colors.primary }]}>Send Invoice</Text>
+                      </TouchableOpacity>
+                    )}
+
+                    {(inv.status === 'sent' || inv.status === 'overdue') && (
+                      <TouchableOpacity
+                        style={[styles.invActionBtn, { borderColor: '#10B981', backgroundColor: '#10B98118' }]}
+                        onPress={() => updateInvoiceStatus(inv.id, 'paid')}
+                      >
+                        <Check color="#059669" size={13} />
+                        <Text style={[styles.invActionText, { color: '#059669' }]}>Mark Paid</Text>
+                      </TouchableOpacity>
+                    )}
+
+                    {inv.status === 'draft' && (
+                      <TouchableOpacity
+                        onPress={() =>
+                          Alert.alert('Delete Draft Invoice', `Delete ${inv.invoiceNumber}?`, [
+                            { text: 'Cancel', style: 'cancel' },
+                            { text: 'Delete', style: 'destructive', onPress: () => deleteInvoice(inv.id) },
+                          ])
+                        }
+                        style={{ padding: 6 }}
+                      >
+                        <Trash2 color={colors.textDim} size={14} />
+                      </TouchableOpacity>
+                    )}
                   </View>
                 </View>
               );
@@ -1063,6 +1497,377 @@ export default function ManagerScreen() {
             </View>
           </View>
         </KeyboardAvoidingView>
+      </Modal>
+
+      {/* Invite / Edit Team Member Modal */}
+      <Modal visible={memberModalVisible} animationType="slide" transparent>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.modalOverlay}
+        >
+          <View style={[styles.modalContent, { backgroundColor: colors.surface }]}>
+            <View style={[styles.modalHeader, { borderBottomColor: colors.borderSubtle }]}>
+              <Text style={[styles.modalTitle, { color: colors.text }]}>
+                {editingMember ? `Edit ${editingMember.firstName}` : 'Invite Team Member'}
+              </Text>
+              <TouchableOpacity onPress={() => setMemberModalVisible(false)}>
+                <X color={colors.textDim} size={20} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={styles.modalBody} keyboardShouldPersistTaps="handled">
+              <View style={{ flexDirection: 'row', gap: Spacing.sm }}>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.inputLabel, { color: colors.textDim }]}>FIRST NAME</Text>
+                  <TextInput
+                    style={[styles.rateInput, { backgroundColor: colors.bg, borderColor: colors.borderSubtle, color: colors.text }]}
+                    value={mFirstName}
+                    onChangeText={setMFirstName}
+                    placeholder="Alex"
+                    placeholderTextColor={colors.textDim}
+                  />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.inputLabel, { color: colors.textDim }]}>LAST NAME</Text>
+                  <TextInput
+                    style={[styles.rateInput, { backgroundColor: colors.bg, borderColor: colors.borderSubtle, color: colors.text }]}
+                    value={mLastName}
+                    onChangeText={setMLastName}
+                    placeholder="Rivera"
+                    placeholderTextColor={colors.textDim}
+                  />
+                </View>
+              </View>
+
+              <Text style={[styles.inputLabel, { color: colors.textDim }]}>WORK EMAIL</Text>
+              <TextInput
+                style={[styles.rateInput, { backgroundColor: colors.bg, borderColor: colors.borderSubtle, color: colors.text }]}
+                value={mEmail}
+                onChangeText={setMEmail}
+                placeholder="alex@studio.com"
+                placeholderTextColor={colors.textDim}
+                autoCapitalize="none"
+                keyboardType="email-address"
+              />
+
+              <Text style={[styles.inputLabel, { color: colors.textDim }]}>WORKSPACE ROLE</Text>
+              <View style={{ flexDirection: 'row', gap: 6, marginBottom: Spacing.sm }}>
+                {(['employee', 'manager', 'admin'] as const).map((r) => {
+                  const active = mRole === r;
+                  return (
+                    <TouchableOpacity
+                      key={r}
+                      style={[
+                        styles.presetPill,
+                        {
+                          flex: 1,
+                          alignItems: 'center',
+                          backgroundColor: active ? colors.primaryMuted : colors.bg,
+                          borderColor: active ? colors.primary : colors.borderSubtle,
+                        },
+                      ]}
+                      onPress={() => setMRole(r)}
+                    >
+                      <Text style={{ fontSize: 12, fontWeight: '700', color: active ? colors.primary : colors.textMuted, textTransform: 'capitalize' }}>
+                        {r}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              <View style={{ flexDirection: 'row', gap: Spacing.sm }}>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.inputLabel, { color: colors.textDim }]}>WEEKLY HRS</Text>
+                  <TextInput
+                    style={[styles.rateInput, { backgroundColor: colors.bg, borderColor: colors.borderSubtle, color: colors.text }]}
+                    value={mCapacity}
+                    onChangeText={setMCapacity}
+                    keyboardType="numeric"
+                  />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.inputLabel, { color: colors.textDim }]}>BILL $/HR</Text>
+                  <TextInput
+                    style={[styles.rateInput, { backgroundColor: colors.bg, borderColor: colors.borderSubtle, color: colors.text }]}
+                    value={mBillRate}
+                    onChangeText={setMBillRate}
+                    keyboardType="decimal-pad"
+                  />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.inputLabel, { color: colors.textDim }]}>COST $/HR</Text>
+                  <TextInput
+                    style={[styles.rateInput, { backgroundColor: colors.bg, borderColor: colors.borderSubtle, color: colors.text }]}
+                    value={mCostRate}
+                    onChangeText={setMCostRate}
+                    keyboardType="decimal-pad"
+                  />
+                </View>
+              </View>
+
+              {editingMember && editingMember.id !== 'guest_mobile_user' && (
+                <TouchableOpacity
+                  style={{
+                    marginTop: Spacing.sm,
+                    marginBottom: Spacing.md,
+                    paddingVertical: 10,
+                    borderRadius: Radius.xs,
+                    borderWidth: 1,
+                    borderColor: colors.danger,
+                    alignItems: 'center',
+                  }}
+                  onPress={() => {
+                    Alert.alert('Remove Team Member', `Remove ${editingMember.firstName} ${editingMember.lastName}?`, [
+                      { text: 'Cancel', style: 'cancel' },
+                      {
+                        text: 'Remove',
+                        style: 'destructive',
+                        onPress: async () => {
+                          await removeTeamMember(editingMember.id);
+                          setMemberModalVisible(false);
+                        },
+                      },
+                    ]);
+                  }}
+                >
+                  <Text style={{ color: colors.danger, fontSize: 13, fontWeight: '700' }}>Remove Member</Text>
+                </TouchableOpacity>
+              )}
+            </ScrollView>
+
+            <View style={[styles.modalFooter, { borderTopColor: colors.borderSubtle }]}>
+              <TouchableOpacity
+                style={[styles.cancelBtn, { borderColor: colors.borderSubtle }]}
+                onPress={() => setMemberModalVisible(false)}
+              >
+                <Text style={[styles.cancelBtnText, { color: colors.textMuted }]}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.saveBtn, { backgroundColor: colors.primary }]}
+                onPress={handleSaveMember}
+              >
+                <Text style={styles.saveBtnText}>{editingMember ? 'Save Member' : 'Send Invite'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      {/* Create Invoice Modal */}
+      <Modal visible={invoiceModalVisible} animationType="slide" transparent>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.modalOverlay}
+        >
+          <View style={[styles.modalContent, { backgroundColor: colors.surface }]}>
+            <View style={[styles.modalHeader, { borderBottomColor: colors.borderSubtle }]}>
+              <Text style={[styles.modalTitle, { color: colors.text }]}>Draft Client Invoice</Text>
+              <TouchableOpacity onPress={() => setInvoiceModalVisible(false)}>
+                <X color={colors.textDim} size={20} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={styles.modalBody} keyboardShouldPersistTaps="handled">
+              <Text style={[styles.inputLabel, { color: colors.textDim }]}>SELECT PROJECT & CLIENT</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6, marginBottom: 8 }}>
+                {projects.map((p) => {
+                  const active = invProjectId === p.id;
+                  return (
+                    <TouchableOpacity
+                      key={p.id}
+                      style={[
+                        styles.presetPill,
+                        {
+                          backgroundColor: active ? colors.primaryMuted : colors.bg,
+                          borderColor: active ? colors.primary : colors.borderSubtle,
+                        },
+                      ]}
+                      onPress={() => setInvProjectId(p.id)}
+                    >
+                      <Text style={{ fontSize: 12, fontWeight: '700', color: active ? colors.primary : colors.textMuted }}>
+                        {p.name}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+
+              <Text style={[styles.inputLabel, { color: colors.textDim }]}>BILLING MODE</Text>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+                {([
+                  { id: 'hourly', label: 'Hourly Timesheet' },
+                  { id: 'progress', label: '25% Progress Milestone' },
+                  { id: 'expense', label: 'Hours + Expenses' },
+                  { id: 'flat', label: 'Custom Flat Fee' },
+                ] as const).map((bm) => {
+                  const active = invBillingMode === bm.id;
+                  return (
+                    <TouchableOpacity
+                      key={bm.id}
+                      style={[
+                        styles.presetPill,
+                        {
+                          backgroundColor: active ? colors.primaryMuted : colors.bg,
+                          borderColor: active ? colors.primary : colors.borderSubtle,
+                        },
+                      ]}
+                      onPress={() => setInvBillingMode(bm.id)}
+                    >
+                      <Text style={{ fontSize: 11, fontWeight: '700', color: active ? colors.primary : colors.textMuted }}>
+                        {bm.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              {invBillingMode === 'flat' && (
+                <>
+                  <Text style={[styles.inputLabel, { color: colors.textDim }]}>CUSTOM INVOICE AMOUNT ($)</Text>
+                  <TextInput
+                    style={[styles.rateInput, { backgroundColor: colors.bg, borderColor: colors.borderSubtle, color: colors.text }]}
+                    value={invCustomAmount}
+                    onChangeText={setInvCustomAmount}
+                    keyboardType="decimal-pad"
+                  />
+                </>
+              )}
+
+              <View style={{ flexDirection: 'row', gap: Spacing.sm }}>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.inputLabel, { color: colors.textDim }]}>DUE DATE (YYYY-MM-DD)</Text>
+                  <TextInput
+                    style={[styles.rateInput, { backgroundColor: colors.bg, borderColor: colors.borderSubtle, color: colors.text }]}
+                    value={invDueDate}
+                    onChangeText={setInvDueDate}
+                  />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.inputLabel, { color: colors.textDim }]}>TAX RATE (%)</Text>
+                  <TextInput
+                    style={[styles.rateInput, { backgroundColor: colors.bg, borderColor: colors.borderSubtle, color: colors.text }]}
+                    value={invTaxRate}
+                    onChangeText={setInvTaxRate}
+                    keyboardType="decimal-pad"
+                  />
+                </View>
+              </View>
+
+              <Text style={[styles.inputLabel, { color: colors.textDim }]}>INVOICE NOTES</Text>
+              <TextInput
+                style={[styles.rateInput, { backgroundColor: colors.bg, borderColor: colors.borderSubtle, color: colors.text }]}
+                value={invNotes}
+                onChangeText={setInvNotes}
+              />
+
+              <View style={[styles.reportCard, { backgroundColor: colors.surfaceSubtle, borderColor: colors.primary, marginBottom: Spacing.lg }]}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Text style={{ fontSize: 12, fontWeight: '700', color: colors.textMuted }}>
+                    Preview Total ({computedInvoiceDraft.hours.toFixed(1)}h)
+                  </Text>
+                  <Text style={{ fontSize: 20, fontWeight: '800', color: colors.primary }}>
+                    ${computedInvoiceDraft.total.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                  </Text>
+                </View>
+              </View>
+            </ScrollView>
+
+            <View style={[styles.modalFooter, { borderTopColor: colors.borderSubtle }]}>
+              <TouchableOpacity
+                style={[styles.cancelBtn, { borderColor: colors.borderSubtle }]}
+                onPress={() => setInvoiceModalVisible(false)}
+              >
+                <Text style={[styles.cancelBtnText, { color: colors.textMuted }]}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.saveBtn, { backgroundColor: colors.primary }]}
+                onPress={handleSaveNewInvoice}
+              >
+                <Text style={styles.saveBtnText}>Create Invoice</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      {/* Client Audit Proof Modal */}
+      <Modal visible={auditInvoice !== null} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { backgroundColor: colors.surface }]}>
+            <View style={[styles.modalHeader, { borderBottomColor: colors.borderSubtle }]}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <ShieldCheck color={colors.primary} size={18} />
+                <Text style={[styles.modalTitle, { color: colors.text }]}>
+                  Client Audit Proof · {auditInvoice?.invoiceNumber}
+                </Text>
+              </View>
+              <TouchableOpacity onPress={() => setAuditInvoice(null)}>
+                <X color={colors.textDim} size={20} />
+              </TouchableOpacity>
+            </View>
+
+            {auditInvoice && (
+              <ScrollView style={styles.modalBody}>
+                <View style={[styles.reportCard, { backgroundColor: colors.surfaceSubtle, borderColor: colors.borderSubtle }]}>
+                  <Text style={{ fontSize: 11, fontWeight: '800', color: colors.primary, letterSpacing: 0.8 }}>
+                    VERIFIED BILLING SUMMARY
+                  </Text>
+                  <Text style={{ fontSize: 16, fontWeight: '800', color: colors.text, marginTop: 4 }}>
+                    {auditInvoice.clientName}
+                  </Text>
+                  <Text style={{ fontSize: 12, color: colors.textMuted, marginTop: 2 }}>
+                    {auditInvoice.projectName}
+                  </Text>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 12 }}>
+                    <View>
+                      <Text style={{ fontSize: 10, color: colors.textDim }}>VERIFIED HOURS</Text>
+                      <Text style={{ fontSize: 15, fontWeight: '800', color: colors.text }}>
+                        {(auditInvoice.totalHours || 40).toFixed(1)}h
+                      </Text>
+                    </View>
+                    <View style={{ alignItems: 'flex-end' }}>
+                      <Text style={{ fontSize: 10, color: colors.textDim }}>INVOICE AMOUNT</Text>
+                      <Text style={{ fontSize: 15, fontWeight: '800', color: colors.primary }}>
+                        {formatCurrency(auditInvoice.amount)}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+
+                <Text style={[styles.inputLabel, { color: colors.textDim }]}>AUDIT VERIFICATION DETAILS</Text>
+                <Text style={{ fontSize: 12, color: colors.textMuted, lineHeight: 18, marginBottom: 8 }}>
+                  Issue Date: {auditInvoice.issueDate} | Due Date: {auditInvoice.dueDate}{'\n'}
+                  Status: {auditInvoice.status.toUpperCase()}{'\n'}
+                  Verification Hash: {auditInvoice.auditHash || `VT-PROOF-${auditInvoice.invoiceNumber}`}
+                </Text>
+                {Boolean(auditInvoice.notes) && (
+                  <Text style={{ fontSize: 12, color: colors.text, marginBottom: 12 }}>
+                    Notes: {auditInvoice.notes}
+                  </Text>
+                )}
+              </ScrollView>
+            )}
+
+            <View style={[styles.modalFooter, { borderTopColor: colors.borderSubtle }]}>
+              <TouchableOpacity
+                style={[styles.cancelBtn, { borderColor: colors.borderSubtle }]}
+                onPress={() => setAuditInvoice(null)}
+              >
+                <Text style={[styles.cancelBtnText, { color: colors.textMuted }]}>Close</Text>
+              </TouchableOpacity>
+              {auditInvoice && (
+                <TouchableOpacity
+                  style={[styles.saveBtn, { backgroundColor: colors.primary, flexDirection: 'row', justifyContent: 'center', gap: 6 }]}
+                  onPress={() => handleShareClientProof(auditInvoice)}
+                >
+                  <Share2 color="#FFFFFF" size={14} />
+                  <Text style={styles.saveBtnText}>Share Client Proof</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+        </View>
       </Modal>
     </SafeAreaView>
   );
@@ -1654,6 +2459,62 @@ const styles = StyleSheet.create({
   saveBtnText: {
     color: '#FFFFFF',
     fontSize: 13,
+    fontWeight: '700',
+  },
+  exportCsvBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: Radius.xs,
+    borderWidth: 1,
+  },
+  exportCsvText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  presetPill: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+  },
+  presetPillText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  inlinePrimaryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: Radius.xs,
+  },
+  inlinePrimaryBtnText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  invoiceActionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 8,
+    flexWrap: 'wrap',
+  },
+  invActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: Radius.xs,
+    borderWidth: 1,
+  },
+  invActionText: {
+    fontSize: 11,
     fontWeight: '700',
   },
 });

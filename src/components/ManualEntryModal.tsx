@@ -10,10 +10,10 @@ import {
   SafeAreaView,
   Alert,
 } from 'react-native';
-import { X, Clock, ChevronDown, Check } from 'lucide-react-native';
+import { X, Clock, ChevronDown, Check, Calendar, Trash2 } from 'lucide-react-native';
 import { useTheme } from '../context/ThemeContext';
 import { Spacing, Radius } from '../constants/theme';
-import { Project } from '../services/api';
+import { Project, Entry, getLocalDateString } from '../services/api';
 import { ProjectPickerModal } from './ProjectPickerModal';
 
 interface ManualEntryModalProps {
@@ -22,7 +22,16 @@ interface ManualEntryModalProps {
   projects: Project[];
   defaultDate?: string;
   initialDate?: string;
-  onSave: (date: string, projectId: string, taskId: string, hours: number, note: string) => Promise<void>;
+  initialEntry?: Entry | null;
+  onSave: (
+    date: string,
+    projectId: string,
+    taskId: string,
+    hours: number,
+    note: string,
+    existingId?: string
+  ) => Promise<void>;
+  onDeleteEntry?: (entryId: string) => Promise<void>;
 }
 
 const QUICK_HOURS = [0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 7.5];
@@ -33,10 +42,12 @@ export function ManualEntryModal({
   projects,
   defaultDate,
   initialDate,
+  initialEntry,
   onSave,
+  onDeleteEntry,
 }: ManualEntryModalProps) {
   const { colors, isDark } = useTheme();
-  const effectiveDate = initialDate || defaultDate || new Date().toISOString().split('T')[0];
+  const effectiveDate = initialEntry?.date || initialDate || defaultDate || getLocalDateString();
   const [date, setDate] = useState(effectiveDate);
   const [projectId, setProjectId] = useState(projects[0]?.id || 'p1');
   const [taskId, setTaskId] = useState(projects[0]?.tasks[0]?.id || 't1_1');
@@ -45,11 +56,36 @@ export function ManualEntryModal({
   const [pickerOpen, setPickerOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  const isEditing = Boolean(initialEntry?.id);
+
   React.useEffect(() => {
-    if (visible) {
-      setDate(initialDate || defaultDate || new Date().toISOString().split('T')[0]);
+    if (!visible) return;
+    if (initialEntry) {
+      setDate(initialEntry.date || getLocalDateString());
+      const matchedProject =
+        projects.find(
+          (p) =>
+            p.id === initialEntry.projectId ||
+            p.name === initialEntry.projectName ||
+            p.tasks.some((t) => t.id === initialEntry.taskId)
+        ) || projects[0];
+      const matchedTask =
+        matchedProject?.tasks.find((t) => t.id === initialEntry.taskId || t.name === initialEntry.taskName) ||
+        matchedProject?.tasks[0];
+      if (matchedProject) setProjectId(matchedProject.id);
+      if (matchedTask) setTaskId(matchedTask.id);
+      setHours(String(initialEntry.hours || 1.0));
+      setNote(initialEntry.note || '');
+    } else {
+      setDate(initialDate || defaultDate || getLocalDateString());
+      if (projects[0]) {
+        setProjectId(projects[0].id);
+        setTaskId(projects[0].tasks[0]?.id || '');
+      }
+      setHours('1.0');
+      setNote('');
     }
-  }, [visible, initialDate, defaultDate]);
+  }, [visible, initialEntry, initialDate, defaultDate, projects]);
 
   const currentProject = projects.find((p) => p.id === projectId) || projects[0];
   const currentTask = currentProject?.tasks.find((t) => t.id === taskId) || currentProject?.tasks[0];
@@ -67,13 +103,28 @@ export function ManualEntryModal({
 
     try {
       setIsSubmitting(true);
-      await onSave(date, projectId, taskId, numHours, note.trim());
+      await onSave(date, projectId, taskId, numHours, note.trim(), initialEntry?.id);
       setNote('');
       setHours('1.0');
       onClose();
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  const handleDelete = () => {
+    if (!initialEntry?.id || !onDeleteEntry) return;
+    Alert.alert('Delete Time Entry', 'Remove this logged time entry permanently?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          await onDeleteEntry(initialEntry.id!);
+          onClose();
+        },
+      },
+    ]);
   };
 
   return (
@@ -83,8 +134,12 @@ export function ManualEntryModal({
           {/* Header */}
           <View style={styles.header}>
             <View>
-              <Text style={[styles.title, { color: colors.text }]}>Manual Time Entry</Text>
-              <Text style={[styles.subtitle, { color: colors.textMuted }]}>Log retrospective hours for any project</Text>
+              <Text style={[styles.title, { color: colors.text }]}>
+                {isEditing ? 'Edit Time Entry' : 'Manual Time Entry'}
+              </Text>
+              <Text style={[styles.subtitle, { color: colors.textMuted }]}>
+                {isEditing ? 'Update logged project, hours, date, or notes' : 'Log retrospective hours for any project'}
+              </Text>
             </View>
             <TouchableOpacity onPress={onClose} style={[styles.closeBtn, { backgroundColor: colors.surfaceSubtle }]}>
               <X color={colors.textMuted} size={20} />
@@ -92,6 +147,20 @@ export function ManualEntryModal({
           </View>
 
           <ScrollView style={styles.content} contentContainerStyle={styles.contentInner}>
+            {/* Date Picker Row */}
+            <Text style={[styles.fieldLabel, { color: colors.textDim }]}>DATE (YYYY-MM-DD)</Text>
+            <View style={[styles.hoursInputRow, { backgroundColor: colors.inputBg, borderColor: colors.borderSubtle, height: 42 }]}>
+              <Calendar color={colors.textMuted} size={16} style={styles.hoursIcon} />
+              <TextInput
+                style={[styles.dateInput, { color: colors.text }]}
+                value={date}
+                onChangeText={setDate}
+                placeholder="YYYY-MM-DD"
+                placeholderTextColor={colors.textDim}
+                autoCorrect={false}
+              />
+            </View>
+
             {/* Project & Task Selector Pill */}
             <Text style={[styles.fieldLabel, { color: colors.textDim }]}>PROJECT & TASK</Text>
             <TouchableOpacity
@@ -184,9 +253,20 @@ export function ManualEntryModal({
             >
               <Check color="#FFFFFF" size={18} strokeWidth={2.5} style={{ marginRight: Spacing.sm }} />
               <Text style={styles.saveBtnText}>
-                {isSubmitting ? 'Logging...' : 'Log Time to Timesheet'}
+                {isSubmitting ? 'Saving...' : isEditing ? 'Save Changes' : 'Log Time to Timesheet'}
               </Text>
             </TouchableOpacity>
+
+            {isEditing && onDeleteEntry && (
+              <TouchableOpacity
+                style={[styles.deleteEntryBtn, { borderColor: colors.danger, backgroundColor: colors.surfaceSubtle }]}
+                onPress={handleDelete}
+                activeOpacity={0.8}
+              >
+                <Trash2 color={colors.danger} size={16} />
+                <Text style={[styles.deleteEntryBtnText, { color: colors.danger }]}>Delete Time Entry</Text>
+              </TouchableOpacity>
+            )}
           </ScrollView>
 
           {/* Project Picker Modal */}
@@ -288,6 +368,25 @@ const styles = StyleSheet.create({
   hoursInput: {
     flex: 1,
     fontSize: 18,
+    fontWeight: '700',
+  },
+  dateInput: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  deleteEntryBtn: {
+    marginTop: Spacing.md,
+    borderWidth: 1,
+    borderRadius: Radius.md,
+    height: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  deleteEntryBtnText: {
+    fontSize: 14,
     fontWeight: '700',
   },
   hoursUnit: {
