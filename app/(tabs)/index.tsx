@@ -23,6 +23,7 @@ import {
   Wifi,
   WifiOff,
   Edit3,
+  LogIn,
 } from 'lucide-react-native';
 import { useAuth } from '@/src/context/AuthContext';
 import { useTimesheet } from '@/src/context/TimesheetContext';
@@ -34,7 +35,7 @@ import { Entry } from '@/src/services/api';
 
 export default function TimerScreen() {
   const { colors } = useTheme();
-  const { user, isDemoMode, syncStatus } = useAuth();
+  const { user, isDemoMode, syncStatus, setAuthModalOpen } = useAuth();
   const {
     projects,
     activeTimer,
@@ -139,9 +140,13 @@ export default function TimerScreen() {
       >
         {/* Workspace & Sync Status Bar */}
         <View style={styles.statusBarRow}>
-          <View style={[styles.workspaceBadge, { backgroundColor: colors.surface, borderColor: colors.borderSubtle }]}>
+          <TouchableOpacity
+            style={[styles.workspaceBadge, { backgroundColor: colors.surface, borderColor: colors.borderSubtle }]}
+            onPress={() => setAuthModalOpen(true)}
+            activeOpacity={0.75}
+          >
             <View style={[styles.statusDot, { backgroundColor: colors.primary }]} />
-            <Text style={[styles.workspaceText, { color: colors.text }]}>
+            <Text style={[styles.workspaceText, { color: colors.text }]} numberOfLines={1}>
               {user?.organization?.name || 'Metropolis Studio'}
             </Text>
             {isDemoMode && (
@@ -149,20 +154,32 @@ export default function TimerScreen() {
                 <Text style={[styles.demoTag, { color: colors.primary }]}>DEMO</Text>
               </View>
             )}
-          </View>
+          </TouchableOpacity>
 
-          <View style={styles.syncBadge}>
-            {syncStatus === 'offline' ? (
-              <>
-                <WifiOff color={colors.textDim} size={12} style={{ marginRight: 4 }} />
-                <Text style={[styles.syncText, { color: colors.textDim }]}>Offline</Text>
-              </>
-            ) : (
-              <>
-                <Wifi color={colors.primary} size={12} style={{ marginRight: 4 }} />
-                <Text style={[styles.syncText, { color: colors.primary }]}>Synced</Text>
-              </>
+          <View style={styles.rightStatusGroup}>
+            {isDemoMode && (
+              <TouchableOpacity
+                style={[styles.headerSignInBtn, { backgroundColor: colors.primary }]}
+                onPress={() => setAuthModalOpen(true)}
+                activeOpacity={0.8}
+              >
+                <LogIn color={colors.primaryContrast} size={12} />
+                <Text style={[styles.headerSignInText, { color: colors.primaryContrast }]}>Sign In</Text>
+              </TouchableOpacity>
             )}
+            <View style={styles.syncBadge}>
+              {syncStatus === 'offline' ? (
+                <>
+                  <WifiOff color={colors.textDim} size={12} style={{ marginRight: 4 }} />
+                  <Text style={[styles.syncText, { color: colors.textDim }]}>Offline</Text>
+                </>
+              ) : (
+                <>
+                  <Wifi color={colors.primary} size={12} style={{ marginRight: 4 }} />
+                  <Text style={[styles.syncText, { color: colors.primary }]}>Synced</Text>
+                </>
+              )}
+            </View>
           </View>
         </View>
 
@@ -424,10 +441,29 @@ const styles = StyleSheet.create({
   workspaceBadge: {
     flexDirection: 'row',
     alignItems: 'center',
+    flexShrink: 1,
     paddingVertical: 5,
     paddingHorizontal: Spacing.md,
     borderRadius: Radius.full,
     borderWidth: 1,
+    marginRight: Spacing.sm,
+  },
+  rightStatusGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  headerSignInBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderRadius: Radius.full,
+  },
+  headerSignInText: {
+    fontSize: 11,
+    fontWeight: '700',
   },
   statusDot: {
     width: 6,

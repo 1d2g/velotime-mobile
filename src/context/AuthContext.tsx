@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as LocalAuthentication from 'expo-local-authentication';
+import * as WebBrowser from 'expo-web-browser';
 import {
   User,
   API_BASE,
@@ -10,6 +11,25 @@ import {
   getStoredToken,
   setStoredToken,
 } from '../services/api';
+
+function parseAuthCallbackParams(url: string): Record<string, string> {
+  const result: Record<string, string> = {};
+  const qIndex = url.indexOf('?');
+  if (qIndex === -1) return result;
+  const query = url.slice(qIndex + 1).split('#')[0];
+  for (const part of query.split('&')) {
+    if (!part) continue;
+    const eqIndex = part.indexOf('=');
+    const key = eqIndex === -1 ? part : part.slice(0, eqIndex);
+    const val = eqIndex === -1 ? '' : part.slice(eqIndex + 1);
+    try {
+      result[decodeURIComponent(key)] = decodeURIComponent(val.replace(/\+/g, ' '));
+    } catch {
+      result[key] = val;
+    }
+  }
+  return result;
+}
 
 export const DEMO_USER: User = {
   id: 'guest_mobile_user',
@@ -46,11 +66,12 @@ const BIOMETRIC_ENABLED_KEY = 'velotime_biometric_enabled';
 const ORG_SETTINGS_KEY = 'velotime_org_settings';
 
 interface SignInWorkspaceParams {
-  email: string;
+  email?: string;
+  password?: string;
   name?: string;
   orgName?: string;
   apiKey?: string;
-  role?: UserRole;
+  mode?: 'signin' | 'signup' | 'apikey';
   enableBiometrics?: boolean;
 }
 
@@ -64,6 +85,7 @@ interface AuthContextType {
   isManager: boolean;
   signIn: (email: string, token: string, userObj?: User) => Promise<void>;
   signInWithWorkspace: (params: SignInWorkspaceParams) => Promise<void>;
+  signInWithCloudSSO: () => Promise<boolean>;
   enterDemoMode: () => Promise<void>;
   signOut: () => Promise<void>;
   deleteAccount: () => Promise<void>;
@@ -242,10 +264,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setUser(null);
           setAuthModalOpen(true);
         } else {
-          // Default to Demo Studio workspace so Apple reviewers and new visitors
-          // experience zero-friction live timers and timesheets immediately upon launch.
+          // Present Sign-In modal on launch when no saved workspace session exists,
+          // while keeping Interactive Demo Studio one tap away.
           setIsDemoMode(true);
           setUser(DEMO_USER);
+          setAuthModalOpen(true);
         }
 
         if (bioOn && bioAvailable) {
@@ -314,40 +337,110 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signInWithWorkspace = async ({
     email,
+    password,
     name,
     orgName,
     apiKey,
-    role = 'admin',
+    mode,
     enableBiometrics = false,
   }: SignInWorkspaceParams) => {
-    const cleanEmail = email.trim().toLowerCase();
-    const parts = (name || cleanEmail.split('@')[0] || 'Studio Partner').trim().split(/\s+/);
-    const firstName = parts[0] || 'Studio';
-    const lastName = parts.slice(1).join(' ');
-    const cleanOrg = orgName?.trim() || orgSettings.orgName || 'VeloTime Workspace';
-    const cleanToken = apiKey?.trim() || `vt_session_${Date.now()}`;
+    const cleanEmail = email?.trim().toLowerCase() || '';
+    const cleanApiKey = apiKey?.trim() || '';
+    const resolvedMode = mode || (cleanApiKey ? 'apikey' : 'signin');
 
-    const newUser: User = {
-      id: `usr_${Date.now()}`,
-      email: cleanEmail,
-      firstName,
-      lastName,
-      role,
-      organization: {
-        id: 'org_' + Date.now(),
-        name: cleanOrg,
-        tier: 'pro',
-      },
-    };
+    const res = await fetch(`${API_BASE}/api/v1/mobile/auth`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: cleanEmail || undefined,
+        password: password || undefined,
+        name: name?.trim() || undefined,
+        orgName: orgName?.trim() || undefined,
+        apiKey: cleanApiKey || undefined,
+        mode: resolvedMode,
+      }),
+    });
 
-    await signIn(cleanEmail, cleanToken, newUser);
-    setPreviewRole(role);
-    await updateOrgSettings({ orgName: cleanOrg });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data?.token || !data?.user) {
+      throw new Error(data?.error || `Authentication failed (${res.status})`);
+    }
+
+    const serverUser: User = data.user;
+    const rawRole = (serverUser.role || 'admin').toLowerCase();
+    const normalizedRole: UserRole =
+      rawRole === 'admin' || rawRole === 'owner'
+        ? 'admin'
+        : rawRole === 'manager'
+        ? 'manager'
+        : 'employee';
+
+    await signIn(serverUser.email, data.token, serverUser);
+    setPreviewRole(normalizedRole);
+
+    const serverOrg = data.user.organization as any;
+    await updateOrgSettings({
+      orgName: serverOrg?.name || orgName?.trim() || orgSettings.orgName || 'VeloTime Workspace',
+      ...(serverOrg?.invoicePrefix ? { invoicePrefix: serverOrg.invoicePrefix } : {}),
+      ...(typeof serverOrg?.nextInvoiceNumber === 'number'
+        ? { nextInvoiceNumber: serverOrg.nextInvoiceNumber }
+        : {}),
+      ...(typeof serverOrg?.timerRoundingMinutes === 'number'
+        ? { timerRoundingMinutes: serverOrg.timerRoundingMinutes as 0 | 5 | 6 | 15 }
+        : {}),
+    });
 
     if (enableBiometrics) {
       setBiometricEnabledState(true);
       await AsyncStorage.setItem(BIOMETRIC_ENABLED_KEY, 'true').catch(() => {});
     }
+  };
+
+  const signInWithCloudSSO = async (): Promise<boolean> => {
+    const redirectUri = 'velotime://auth';
+    const authUrl = `https://app.velotime.dg.tools/?mobile_auth=1&redirect_uri=${encodeURIComponent(
+      redirectUri
+    )}`;
+
+    const result = await WebBrowser.openAuthSessionAsync(authUrl, redirectUri);
+    if (result.type !== 'success' || !result.url) {
+      return false;
+    }
+
+    const params = parseAuthCallbackParams(result.url);
+    const liveToken = params.token;
+    if (!liveToken) {
+      throw new Error('Could not complete VeloTime Cloud sign-in.');
+    }
+
+    const cleanEmail = (params.email || 'member@velotime.com').trim().toLowerCase();
+    const rawRole = (params.role || 'admin').toLowerCase();
+    const ssoRole: UserRole =
+      rawRole === 'admin' || rawRole === 'owner'
+        ? 'admin'
+        : rawRole === 'manager'
+        ? 'manager'
+        : 'employee';
+
+    const ssoUser: User = {
+      id: `usr_sso_${Date.now()}`,
+      email: cleanEmail,
+      firstName: params.firstName || cleanEmail.split('@')[0] || 'VeloTime',
+      lastName: params.lastName || '',
+      role: ssoRole,
+      organization: {
+        id: `org_sso_${Date.now()}`,
+        name: params.orgName || 'VeloTime Workspace',
+        tier: 'pro',
+      },
+    };
+
+    await signIn(cleanEmail, liveToken, ssoUser);
+    setPreviewRole(ssoRole);
+    if (params.orgName) {
+      await updateOrgSettings({ orgName: params.orgName });
+    }
+    return true;
   };
 
   const enterDemoMode = async () => {
@@ -425,6 +518,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         isManager,
         signIn,
         signInWithWorkspace,
+        signInWithCloudSSO,
         enterDemoMode,
         signOut,
         deleteAccount,

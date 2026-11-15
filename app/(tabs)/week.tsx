@@ -21,6 +21,7 @@ import {
   Lock,
   Edit3,
   Users,
+  LogIn,
 } from 'lucide-react-native';
 import { useAuth } from '@/src/context/AuthContext';
 import { useTimesheet } from '@/src/context/TimesheetContext';
@@ -32,7 +33,7 @@ import { Entry, getLocalDateString } from '@/src/services/api';
 
 export default function WeekScreen() {
   const { colors } = useTheme();
-  const { isManager } = useAuth();
+  const { user, isManager, isDemoMode, setAuthModalOpen } = useAuth();
   const {
     projects,
     entries,
@@ -222,6 +223,36 @@ export default function WeekScreen() {
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: colors.bg }]}>
       <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
+        {/* Top Workspace & Sign-In Bar */}
+        <View style={styles.topWorkspaceRow}>
+          <TouchableOpacity
+            style={[styles.workspacePill, { backgroundColor: colors.surface, borderColor: colors.borderSubtle }]}
+            onPress={() => setAuthModalOpen(true)}
+            activeOpacity={0.75}
+          >
+            <View style={[styles.workspaceDot, { backgroundColor: colors.primary }]} />
+            <Text style={[styles.workspacePillText, { color: colors.text }]} numberOfLines={1}>
+              {user?.organization?.name || 'Metropolis Studio'}
+            </Text>
+            {isDemoMode && (
+              <View style={[styles.demoBadge, { backgroundColor: colors.primaryMuted }]}>
+                <Text style={[styles.demoBadgeText, { color: colors.primary }]}>DEMO</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+
+          {isDemoMode && (
+            <TouchableOpacity
+              style={[styles.topSignInBtn, { backgroundColor: colors.primary }]}
+              onPress={() => setAuthModalOpen(true)}
+              activeOpacity={0.8}
+            >
+              <LogIn color={colors.primaryContrast} size={12} />
+              <Text style={[styles.topSignInText, { color: colors.primaryContrast }]}>Sign In</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+
         {/* Week Navigation Header Bar */}
         <View style={[styles.navCard, { backgroundColor: colors.surface, borderColor: colors.borderSubtle }]}>
           <View style={styles.navControls}>
@@ -1132,5 +1163,54 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     padding: Spacing.md,
+  },
+  topWorkspaceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: Spacing.sm,
+    gap: 8,
+  },
+  workspacePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexShrink: 1,
+    paddingVertical: 5,
+    paddingHorizontal: Spacing.md,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+  },
+  workspaceDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    marginRight: 6,
+  },
+  workspacePillText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  demoBadge: {
+    marginLeft: 6,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 3,
+  },
+  demoBadgeText: {
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  topSignInBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderRadius: Radius.full,
+  },
+  topSignInText: {
+    fontSize: 11,
+    fontWeight: '700',
   },
 });

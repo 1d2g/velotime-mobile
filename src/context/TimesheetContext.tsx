@@ -281,6 +281,13 @@ export function TimesheetProvider({ children }: { children: React.ReactNode }) {
     };
   }, [activeTimer.isRunning]);
 
+  // Auto-sync cloud workspace data when signing into a live account
+  useEffect(() => {
+    if (!isDemoMode && user && token?.startsWith('vt_live_')) {
+      refreshData();
+    }
+  }, [token, isDemoMode, user?.id]);
+
   // Remote live stopwatch sync polling (Mobile <-> Web & Extension)
   useEffect(() => {
     if (isDemoMode || !user) return;
@@ -490,12 +497,24 @@ export function TimesheetProvider({ children }: { children: React.ReactNode }) {
     if (!isDemoMode && user) {
       try {
         setSyncStatus('syncing');
-        await apiRequest('/api/entries', 'POST', {
+        const endpoint = token?.startsWith('vt_live_') ? '/api/v1/entries' : '/api/entries';
+        const saved = await apiRequest(endpoint, 'POST', {
           dateId: todayStr,
+          date: todayStr,
           taskId: task.id,
+          project_name: project.name,
+          task_name: task.name,
+          user_email: user.email,
           hours,
           note: newEntry.note,
         });
+        if (saved?.id) {
+          const syncedList = updatedList.map((item) =>
+            item.id === newEntry.id ? { ...item, id: saved.id } : item
+          );
+          setEntries(syncedList);
+          await AsyncStorage.setItem('velotime_mobile_entries', JSON.stringify(syncedList));
+        }
         setSyncStatus('synced');
       } catch (err) {
         setSyncStatus('offline');
@@ -549,13 +568,23 @@ export function TimesheetProvider({ children }: { children: React.ReactNode }) {
       try {
         setSyncStatus('syncing');
         const endpoint = token?.startsWith('vt_live_') ? '/api/v1/entries' : '/api/entries';
-        await apiRequest(endpoint, 'POST', {
+        const saved = await apiRequest(endpoint, 'POST', {
           dateId: date,
           date,
           taskId: task.id,
+          project_name: project.name,
+          task_name: task.name,
+          user_email: user.email,
           hours: newEntry.hours,
           note: newEntry.note,
         });
+        if (saved?.id) {
+          const syncedList = updatedList.map((item) =>
+            item.id === newEntry.id ? { ...item, id: saved.id } : item
+          );
+          setEntries(syncedList);
+          await AsyncStorage.setItem('velotime_mobile_entries', JSON.stringify(syncedList));
+        }
         setSyncStatus('synced');
       } catch {
         setSyncStatus('offline');
@@ -585,9 +614,10 @@ export function TimesheetProvider({ children }: { children: React.ReactNode }) {
         ? targetProject.tasks.find((t) => t.id === updates.taskId)
         : undefined) || targetProject?.tasks[0];
 
+    let updatedEntryRef: Entry | null = null;
     const updatedList = entries.map((e) => {
       if (e.id !== entryId) return e;
-      return {
+      updatedEntryRef = {
         ...e,
         date: updates.date ?? e.date,
         projectId: targetProject?.id ?? e.projectId,
@@ -599,10 +629,31 @@ export function TimesheetProvider({ children }: { children: React.ReactNode }) {
         hours: updates.hours !== undefined ? Math.round(updates.hours * 100) / 100 : e.hours,
         note: updates.note !== undefined ? updates.note : e.note,
       };
+      return updatedEntryRef;
     });
 
     setEntries(updatedList);
     await AsyncStorage.setItem('velotime_mobile_entries', JSON.stringify(updatedList));
+
+    if (!isDemoMode && user && token?.startsWith('vt_live_') && updatedEntryRef) {
+      const ref: Entry = updatedEntryRef;
+      try {
+        setSyncStatus('syncing');
+        await apiRequest('/api/v1/entries', 'POST', {
+          dateId: ref.date,
+          date: ref.date,
+          taskId: ref.taskId,
+          project_name: ref.projectName,
+          task_name: ref.taskName,
+          user_email: user.email,
+          hours: ref.hours,
+          note: ref.note || '',
+        });
+        setSyncStatus('synced');
+      } catch {
+        setSyncStatus('offline');
+      }
+    }
   };
 
   const deleteEntry = async (entryIdOrIndex: string | number) => {
@@ -617,9 +668,23 @@ export function TimesheetProvider({ children }: { children: React.ReactNode }) {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     } catch {}
 
+    const targetEntry = entries.find((e, idx) =>
+      e.id ? e.id === entryIdOrIndex : idx === entryIdOrIndex
+    );
+
     const updatedList = entries.filter((e, idx) => (e.id ? e.id !== entryIdOrIndex : idx !== entryIdOrIndex));
     setEntries(updatedList);
     await AsyncStorage.setItem('velotime_mobile_entries', JSON.stringify(updatedList));
+
+    if (
+      !isDemoMode &&
+      user &&
+      token?.startsWith('vt_live_') &&
+      targetEntry?.id &&
+      !String(targetEntry.id).startsWith('e_')
+    ) {
+      apiRequest(`/api/v1/entries/${encodeURIComponent(String(targetEntry.id))}`, 'DELETE').catch(() => {});
+    }
   };
 
   const submitWeekTimesheet = async () => {
@@ -700,7 +765,19 @@ export function TimesheetProvider({ children }: { children: React.ReactNode }) {
 
     if (!isDemoMode && user) {
       try {
-        await apiRequest('/api/projects', 'POST', newProject);
+        if (token?.startsWith('vt_live_')) {
+          const created = await apiRequest('/api/v1/projects', 'POST', {
+            name: newProject.name,
+            client_name: newProject.clientName,
+            budget_type: 'hours',
+            budget_limit: newProject.budgetHours || 100,
+          });
+          if (created?.id) {
+            await refreshData();
+          }
+        } else {
+          await apiRequest('/api/projects', 'POST', newProject);
+        }
       } catch {}
     }
   };
@@ -805,15 +882,59 @@ export function TimesheetProvider({ children }: { children: React.ReactNode }) {
           apiRequest('/api/v1/projects').catch(() => null),
           apiRequest('/api/v1/entries').catch(() => null),
         ]);
-        const remoteProjects = projRes?.projects || (Array.isArray(projRes) ? projRes : null);
-        if (Array.isArray(remoteProjects) && remoteProjects.length > 0) {
-          setProjects(remoteProjects);
-          await AsyncStorage.setItem('velotime_offline_projects', JSON.stringify(remoteProjects));
+        const rawProjects = projRes?.projects || (Array.isArray(projRes) ? projRes : null);
+        if (Array.isArray(rawProjects) && rawProjects.length > 0) {
+          const normalizedProjects: Project[] = rawProjects.map((p: any) => ({
+            id: p.id,
+            name: p.name,
+            clientName: p.clientName ?? p.client_name ?? 'General Client',
+            hourlyRate: p.hourlyRate ?? 150,
+            budgetLimit: p.budgetLimit ?? p.budget_limit ?? undefined,
+            budgetHours: p.budgetHours ?? p.budget_limit ?? 100,
+            budgetType: p.budgetType ?? p.budget_type ?? 'hours',
+            tasks: Array.isArray(p.tasks)
+              ? p.tasks.map((t: any) => ({
+                  id: t.id,
+                  name: t.name,
+                  hourlyRate: t.hourlyRate ?? p.hourlyRate ?? 150,
+                  isBillable: t.isBillable !== undefined ? t.isBillable : t.is_billable !== false,
+                  budgetHours: t.budgetHours ?? undefined,
+                }))
+              : [],
+          }));
+          setProjects(normalizedProjects);
+          await AsyncStorage.setItem('velotime_offline_projects', JSON.stringify(normalizedProjects));
+
+          setActiveTimer((prev) => {
+            if (prev.isRunning || prev.elapsedSeconds > 0) return prev;
+            const hasProj = normalizedProjects.some((p) => p.id === prev.projectId);
+            if (hasProj) return prev;
+            const firstProj = normalizedProjects[0];
+            const firstTask = firstProj.tasks?.[0];
+            return {
+              ...prev,
+              projectId: firstProj.id,
+              taskId: firstTask?.id || 'default',
+            };
+          });
         }
-        const remoteEntries = entryRes?.entries || (Array.isArray(entryRes) ? entryRes : null);
-        if (Array.isArray(remoteEntries) && remoteEntries.length > 0) {
-          setEntries(remoteEntries);
-          await AsyncStorage.setItem('velotime_mobile_entries', JSON.stringify(remoteEntries));
+        const rawEntries = entryRes?.entries || (Array.isArray(entryRes) ? entryRes : null);
+        if (Array.isArray(rawEntries)) {
+          const normalizedEntries: Entry[] = rawEntries.map((e: any) => ({
+            id: e.id,
+            date: e.date,
+            taskId: e.taskId || e.task_id || '',
+            projectId: e.projectId || e.project_id || undefined,
+            hours: Number(e.hours) || 0,
+            note: e.note || '',
+            projectName: e.projectName || e.project_name || 'General Project',
+            taskName: e.taskName || e.task_name || 'General Task',
+            clientName: e.clientName || e.client_name || 'General Client',
+            userName: e.userName || e.user_name || undefined,
+            isBillable: e.isBillable !== undefined ? e.isBillable : e.is_billable !== false,
+          }));
+          setEntries(normalizedEntries);
+          await AsyncStorage.setItem('velotime_mobile_entries', JSON.stringify(normalizedEntries));
         }
       } else {
         const remoteProjects = await apiRequest('/api/projects');

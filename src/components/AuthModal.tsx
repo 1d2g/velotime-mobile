@@ -11,6 +11,7 @@ import {
   Platform,
   Switch,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import {
@@ -23,10 +24,15 @@ import {
   X,
   ArrowRight,
   Lock,
+  Globe,
+  Eye,
+  EyeOff,
 } from 'lucide-react-native';
 import { Spacing, Radius } from '../constants/theme';
 import { useTheme } from '../context/ThemeContext';
-import { useAuth, UserRole } from '../context/AuthContext';
+import { useAuth } from '../context/AuthContext';
+
+type AuthMode = 'signin' | 'signup' | 'apikey';
 
 export function AuthModal() {
   const { colors } = useTheme();
@@ -42,17 +48,21 @@ export function AuthModal() {
     hasSavedCredentials,
     authenticateWithFaceId,
     signInWithWorkspace,
+    signInWithCloudSSO,
     enterDemoMode,
     orgSettings,
   } = useAuth();
 
+  const [authMode, setAuthMode] = useState<AuthMode>('signin');
   const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [name, setName] = useState('');
   const [orgName, setOrgName] = useState('');
   const [apiKey, setApiKey] = useState('');
-  const [role, setRole] = useState<UserRole>('admin');
   const [enableBiometrics, setEnableBiometrics] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [ssoLoading, setSsoLoading] = useState(false);
 
   const visible = !isLoading && (isAuthModalOpen || user === null || isBiometricLocked);
 
@@ -61,8 +71,8 @@ export function AuthModal() {
       setEmail(user.email || '');
       setName([user.firstName, user.lastName].filter(Boolean).join(' '));
       setOrgName(user.organization?.name || orgSettings.orgName || '');
-    } else if (visible && !orgName) {
-      setOrgName(orgSettings.orgName || 'VeloTime Workspace');
+    } else if (visible && isDemoMode) {
+      setOrgName('');
     }
   }, [visible, user, isDemoMode, orgSettings.orgName]);
 
@@ -85,23 +95,53 @@ export function AuthModal() {
     }
   };
 
+  const handleCloudSSO = async () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setSsoLoading(true);
+    try {
+      const ok = await signInWithCloudSSO();
+      if (ok) {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      }
+    } catch (err: any) {
+      Alert.alert('Cloud Sign In Error', err?.message || 'Unable to complete VeloTime Cloud sign-in.');
+    } finally {
+      setSsoLoading(false);
+    }
+  };
+
   const handleSignIn = async () => {
     const cleanEmail = email.trim();
-    if (!cleanEmail || !cleanEmail.includes('@')) {
-      Alert.alert('Valid Email Required', 'Please enter a valid work email address.');
-      return;
+    const cleanApiKey = apiKey.trim();
+
+    if (authMode === 'apikey') {
+      if (!cleanApiKey) {
+        Alert.alert('Workspace API Key Required', 'Please paste your vt_live_ workspace API key.');
+        return;
+      }
+    } else {
+      if (!cleanEmail || !cleanEmail.includes('@')) {
+        Alert.alert('Valid Email Required', 'Please enter a valid work email address.');
+        return;
+      }
+      if (authMode === 'signup' && password.length < 6) {
+        Alert.alert('Password Required', 'Please choose a password of at least 6 characters.');
+        return;
+      }
     }
 
     setSubmitting(true);
     try {
       await signInWithWorkspace({
-        email: cleanEmail,
+        email: cleanEmail || undefined,
+        password: password || undefined,
         name: name.trim() || undefined,
         orgName: orgName.trim() || undefined,
-        apiKey: apiKey.trim() || undefined,
-        role,
+        apiKey: cleanApiKey || undefined,
+        mode: authMode,
         enableBiometrics: isBiometricSupported && enableBiometrics,
       });
+      setPassword('');
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (err: any) {
       Alert.alert('Sign In Error', err?.message || 'Unable to sign in right now.');
@@ -143,7 +183,7 @@ export function AuthModal() {
               <Text style={[styles.headerSub, { color: colors.textMuted }]}>
                 {isBiometricLocked
                   ? `${biometricLabel} protection enabled`
-                  : 'Connect your workspace or enter Interactive Studio'}
+                  : 'Sync timesheets, projects & timers with VeloTime Cloud'}
               </Text>
             </View>
           </View>
@@ -195,8 +235,8 @@ export function AuthModal() {
             </View>
           ) : (
             <>
-              {/* 1-Tap Face ID Sign-In Card */}
-              {isBiometricSupported && (
+              {/* 1-Tap Face ID Sign-In Card when saved credentials exist */}
+              {isBiometricSupported && hasSavedCredentials && (
                 <TouchableOpacity
                   style={[
                     styles.faceIdCard,
@@ -213,105 +253,187 @@ export function AuthModal() {
                       Sign in with {biometricLabel}
                     </Text>
                     <Text style={[styles.faceIdSub, { color: colors.textMuted }]}>
-                      {hasSavedCredentials
-                        ? 'Restore your encrypted iOS Keychain workspace session'
-                        : 'Verify biometrics to unlock workspace access immediately'}
+                      Restore your encrypted iOS Keychain workspace session
                     </Text>
                   </View>
                   <ArrowRight size={18} color={colors.primary} />
                 </TouchableOpacity>
               )}
 
-              {/* Standard Workspace Sign-In Form */}
+              {/* VeloTime Cloud / Google SSO Button */}
+              <TouchableOpacity
+                style={[
+                  styles.ssoBtn,
+                  { backgroundColor: colors.surface, borderColor: colors.primary },
+                ]}
+                onPress={handleCloudSSO}
+                disabled={ssoLoading}
+                activeOpacity={0.85}
+              >
+                {ssoLoading ? (
+                  <ActivityIndicator size="small" color={colors.primary} />
+                ) : (
+                  <Globe size={18} color={colors.primary} />
+                )}
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.ssoBtnTitle, { color: colors.text }]}>
+                    {ssoLoading ? 'Opening VeloTime Cloud...' : 'Continue with VeloTime Cloud / Google'}
+                  </Text>
+                  <Text style={[styles.ssoBtnSub, { color: colors.textMuted }]}>
+                    Use your existing web workspace or Google login via Clerk
+                  </Text>
+                </View>
+                <ArrowRight size={16} color={colors.primary} />
+              </TouchableOpacity>
+
+              {/* Auth Mode Tabs: Sign In | Create Account | API Key */}
               <View style={[styles.formCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-                <Text style={[styles.sectionHeading, { color: colors.textMuted }]}>
-                  WORKSPACE CREDENTIALS
-                </Text>
-
-                <Text style={[styles.label, { color: colors.textMuted }]}>Work Email *</Text>
-                <View style={[styles.inputWrap, { backgroundColor: colors.inputBg, borderColor: colors.border }]}>
-                  <Mail size={16} color={colors.textDim} />
-                  <TextInput
-                    style={[styles.input, { color: colors.text }]}
-                    value={email}
-                    onChangeText={setEmail}
-                    placeholder="you@studio.com"
-                    placeholderTextColor={colors.textDim}
-                    autoCapitalize="none"
-                    keyboardType="email-address"
-                    autoCorrect={false}
-                  />
-                </View>
-
-                <Text style={[styles.label, { color: colors.textMuted }]}>Full Name</Text>
-                <View style={[styles.inputWrap, { backgroundColor: colors.inputBg, borderColor: colors.border }]}>
-                  <UserIcon size={16} color={colors.textDim} />
-                  <TextInput
-                    style={[styles.input, { color: colors.text }]}
-                    value={name}
-                    onChangeText={setName}
-                    placeholder="Sarah Chen"
-                    placeholderTextColor={colors.textDim}
-                  />
-                </View>
-
-                <Text style={[styles.label, { color: colors.textMuted }]}>Workspace / Organization</Text>
-                <View style={[styles.inputWrap, { backgroundColor: colors.inputBg, borderColor: colors.border }]}>
-                  <Building2 size={16} color={colors.textDim} />
-                  <TextInput
-                    style={[styles.input, { color: colors.text }]}
-                    value={orgName}
-                    onChangeText={setOrgName}
-                    placeholder="Metropolis Architecture Studio"
-                    placeholderTextColor={colors.textDim}
-                  />
-                </View>
-
-                <Text style={[styles.label, { color: colors.textMuted }]}>
-                  Workspace API Key (Optional for Cloud Sync)
-                </Text>
-                <View style={[styles.inputWrap, { backgroundColor: colors.inputBg, borderColor: colors.border }]}>
-                  <KeyRound size={16} color={colors.textDim} />
-                  <TextInput
-                    style={[styles.input, { color: colors.text }]}
-                    value={apiKey}
-                    onChangeText={setApiKey}
-                    placeholder="vt_live_..."
-                    placeholderTextColor={colors.textDim}
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                    secureTextEntry
-                  />
-                </View>
-
-                <Text style={[styles.label, { color: colors.textMuted }]}>Workspace Role</Text>
-                <View style={styles.roleRow}>
-                  {(['admin', 'employee'] as const).map((r) => {
-                    const active = role === r;
+                <View style={[styles.modeTabBar, { backgroundColor: colors.surfaceSubtle, borderColor: colors.borderSubtle }]}>
+                  {(
+                    [
+                      { id: 'signin', label: 'Sign In' },
+                      { id: 'signup', label: 'Create Account' },
+                      { id: 'apikey', label: 'API Key' },
+                    ] as const
+                  ).map((tab) => {
+                    const active = authMode === tab.id;
                     return (
                       <TouchableOpacity
-                        key={r}
+                        key={tab.id}
                         style={[
-                          styles.roleChip,
-                          {
-                            backgroundColor: active ? colors.primaryMuted : colors.surfaceSubtle,
-                            borderColor: active ? colors.primary : colors.border,
-                          },
+                          styles.modeTabBtn,
+                          active && [styles.modeTabBtnActive, { backgroundColor: colors.surface, borderColor: colors.border }],
                         ]}
-                        onPress={() => setRole(r)}
+                        onPress={() => setAuthMode(tab.id)}
                       >
                         <Text
                           style={[
-                            styles.roleChipText,
+                            styles.modeTabText,
                             { color: active ? colors.primary : colors.textMuted },
                           ]}
                         >
-                          {r === 'admin' ? 'Admin / Manager' : 'Team Member'}
+                          {tab.label}
                         </Text>
                       </TouchableOpacity>
                     );
                   })}
                 </View>
+
+                {authMode !== 'apikey' ? (
+                  <>
+                    <Text style={[styles.label, { color: colors.textMuted }]}>Work Email *</Text>
+                    <View style={[styles.inputWrap, { backgroundColor: colors.inputBg, borderColor: colors.border }]}>
+                      <Mail size={16} color={colors.textDim} />
+                      <TextInput
+                        style={[styles.input, { color: colors.text }]}
+                        value={email}
+                        onChangeText={setEmail}
+                        placeholder="you@company.com"
+                        placeholderTextColor={colors.textDim}
+                        autoCapitalize="none"
+                        keyboardType="email-address"
+                        autoCorrect={false}
+                      />
+                    </View>
+
+                    <Text style={[styles.label, { color: colors.textMuted }]}>
+                      Password {authMode === 'signup' ? '*' : '(required for password accounts)'}
+                    </Text>
+                    <View style={[styles.inputWrap, { backgroundColor: colors.inputBg, borderColor: colors.border }]}>
+                      <Lock size={16} color={colors.textDim} />
+                      <TextInput
+                        style={[styles.input, { color: colors.text }]}
+                        value={password}
+                        onChangeText={setPassword}
+                        placeholder={authMode === 'signup' ? 'Create password (6+ chars)' : 'Enter your password'}
+                        placeholderTextColor={colors.textDim}
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        secureTextEntry={!showPassword}
+                      />
+                      <TouchableOpacity
+                        onPress={() => setShowPassword((prev) => !prev)}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      >
+                        {showPassword ? (
+                          <EyeOff size={16} color={colors.textDim} />
+                        ) : (
+                          <Eye size={16} color={colors.textDim} />
+                        )}
+                      </TouchableOpacity>
+                    </View>
+
+                    {authMode === 'signup' && (
+                      <>
+                        <Text style={[styles.label, { color: colors.textMuted }]}>Full Name</Text>
+                        <View style={[styles.inputWrap, { backgroundColor: colors.inputBg, borderColor: colors.border }]}>
+                          <UserIcon size={16} color={colors.textDim} />
+                          <TextInput
+                            style={[styles.input, { color: colors.text }]}
+                            value={name}
+                            onChangeText={setName}
+                            placeholder="Sarah Chen"
+                            placeholderTextColor={colors.textDim}
+                          />
+                        </View>
+
+                        <Text style={[styles.label, { color: colors.textMuted }]}>Workspace / Organization</Text>
+                        <View style={[styles.inputWrap, { backgroundColor: colors.inputBg, borderColor: colors.border }]}>
+                          <Building2 size={16} color={colors.textDim} />
+                          <TextInput
+                            style={[styles.input, { color: colors.text }]}
+                            value={orgName}
+                            onChangeText={setOrgName}
+                            placeholder="My Workspace"
+                            placeholderTextColor={colors.textDim}
+                          />
+                        </View>
+                      </>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <Text style={[styles.label, { color: colors.textMuted }]}>Workspace API Key *</Text>
+                    <View style={[styles.inputWrap, { backgroundColor: colors.inputBg, borderColor: colors.border }]}>
+                      <KeyRound size={16} color={colors.textDim} />
+                      <TextInput
+                        style={[styles.input, { color: colors.text }]}
+                        value={apiKey}
+                        onChangeText={setApiKey}
+                        placeholder="vt_live_..."
+                        placeholderTextColor={colors.textDim}
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        secureTextEntry={!showPassword}
+                      />
+                      <TouchableOpacity
+                        onPress={() => setShowPassword((prev) => !prev)}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      >
+                        {showPassword ? (
+                          <EyeOff size={16} color={colors.textDim} />
+                        ) : (
+                          <Eye size={16} color={colors.textDim} />
+                        )}
+                      </TouchableOpacity>
+                    </View>
+
+                    <Text style={[styles.label, { color: colors.textMuted }]}>Work Email (Optional)</Text>
+                    <View style={[styles.inputWrap, { backgroundColor: colors.inputBg, borderColor: colors.border }]}>
+                      <Mail size={16} color={colors.textDim} />
+                      <TextInput
+                        style={[styles.input, { color: colors.text }]}
+                        value={email}
+                        onChangeText={setEmail}
+                        placeholder="Matches workspace member"
+                        placeholderTextColor={colors.textDim}
+                        autoCapitalize="none"
+                        keyboardType="email-address"
+                        autoCorrect={false}
+                      />
+                    </View>
+                  </>
+                )}
 
                 {isBiometricSupported && (
                   <View style={[styles.bioToggleRow, { borderTopColor: colors.borderSubtle }]}>
@@ -320,7 +442,7 @@ export function AuthModal() {
                         Enable {biometricLabel} Quick Sign-In
                       </Text>
                       <Text style={[styles.bioToggleSub, { color: colors.textMuted }]}>
-                        Store session token in iOS Keychain for instant Face ID unlock
+                        Store session token in iOS Keychain for instant {biometricLabel} unlock
                       </Text>
                     </View>
                     <Switch
@@ -338,9 +460,19 @@ export function AuthModal() {
                   disabled={submitting}
                   activeOpacity={0.85}
                 >
-                  <ShieldCheck size={18} color={colors.primaryContrast} />
+                  {submitting ? (
+                    <ActivityIndicator size="small" color={colors.primaryContrast} />
+                  ) : (
+                    <ShieldCheck size={18} color={colors.primaryContrast} />
+                  )}
                   <Text style={[styles.primaryBtnText, { color: colors.primaryContrast }]}>
-                    {submitting ? 'Connecting Workspace...' : 'Sign In to Workspace'}
+                    {submitting
+                      ? 'Connecting Workspace...'
+                      : authMode === 'signup'
+                      ? 'Create Workspace Account'
+                      : authMode === 'apikey'
+                      ? 'Connect with API Key'
+                      : 'Sign In to Workspace'}
                   </Text>
                 </TouchableOpacity>
               </View>
@@ -393,7 +525,7 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     padding: Spacing.lg,
-    gap: Spacing.lg,
+    gap: Spacing.md,
     paddingBottom: 48,
   },
   lockCard: {
@@ -436,13 +568,45 @@ const styles = StyleSheet.create({
   },
   faceIdTitle: { fontSize: 16, fontWeight: '700' },
   faceIdSub: { fontSize: 12, marginTop: 2 },
+  ssoBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: Spacing.md,
+    borderRadius: Radius.lg,
+    borderWidth: 1.5,
+  },
+  ssoBtnTitle: { fontSize: 15, fontWeight: '700' },
+  ssoBtnSub: { fontSize: 11, marginTop: 2 },
   formCard: {
     borderRadius: Radius.lg,
     borderWidth: 1,
     padding: Spacing.lg,
     gap: Spacing.sm,
   },
-  sectionHeading: { fontSize: 11, fontWeight: '700', letterSpacing: 1, marginBottom: 4 },
+  modeTabBar: {
+    flexDirection: 'row',
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    padding: 3,
+    gap: 4,
+    marginBottom: 4,
+  },
+  modeTabBtn: {
+    flex: 1,
+    paddingVertical: 8,
+    borderRadius: Radius.sm,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'transparent',
+  },
+  modeTabBtnActive: {
+    shadowColor: '#000',
+    shadowOpacity: 0.04,
+    shadowRadius: 2,
+    shadowOffset: { width: 0, height: 1 },
+  },
+  modeTabText: { fontSize: 12, fontWeight: '700' },
   label: { fontSize: 12, fontWeight: '600', marginTop: 6 },
   inputWrap: {
     flexDirection: 'row',
@@ -454,15 +618,6 @@ const styles = StyleSheet.create({
     height: 46,
   },
   input: { flex: 1, fontSize: 15 },
-  roleRow: { flexDirection: 'row', gap: 10, marginTop: 4 },
-  roleChip: {
-    flex: 1,
-    paddingVertical: 10,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    alignItems: 'center',
-  },
-  roleChipText: { fontSize: 13, fontWeight: '700' },
   bioToggleRow: {
     flexDirection: 'row',
     alignItems: 'center',
