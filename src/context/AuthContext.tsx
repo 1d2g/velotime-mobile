@@ -85,7 +85,7 @@ interface AuthContextType {
   isManager: boolean;
   signIn: (email: string, token: string, userObj?: User) => Promise<void>;
   signInWithWorkspace: (params: SignInWorkspaceParams) => Promise<void>;
-  signInWithCloudSSO: () => Promise<boolean>;
+  signInWithCloudSSO: () => Promise<{ ok: boolean; error?: string }>;
   enterDemoMode: () => Promise<void>;
   signOut: () => Promise<void>;
   deleteAccount: () => Promise<void>;
@@ -396,51 +396,65 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const signInWithCloudSSO = async (): Promise<boolean> => {
+  const signInWithCloudSSO = async (): Promise<{ ok: boolean; error?: string }> => {
     const redirectUri = 'velotime://auth';
-    const authUrl = `https://app.velotime.dg.tools/?mobile_auth=1&redirect_uri=${encodeURIComponent(
+    const authUrl = `https://app.velotime.dg.tools/?mobile_auth=1&strategy=google&redirect_uri=${encodeURIComponent(
       redirectUri
     )}`;
 
-    const result = await WebBrowser.openAuthSessionAsync(authUrl, redirectUri);
-    if (result.type !== 'success' || !result.url) {
-      return false;
+    try {
+      const result = await WebBrowser.openAuthSessionAsync(authUrl, redirectUri);
+      if (result.type !== 'success' || !result.url) {
+        return { ok: false };
+      }
+
+      const params = parseAuthCallbackParams(result.url);
+      if (params.cancelled === '1') {
+        return { ok: false, error: 'Sign-in cancelled.' };
+      }
+
+      const liveToken = params.token;
+      if (!liveToken) {
+        return {
+          ok: false,
+          error: params.error || 'Could not complete Google sign-in.',
+        };
+      }
+
+      const cleanEmail = (params.email || 'member@velotime.com').trim().toLowerCase();
+      const rawRole = (params.role || 'admin').toLowerCase();
+      const ssoRole: UserRole =
+        rawRole === 'admin' || rawRole === 'owner'
+          ? 'admin'
+          : rawRole === 'manager'
+          ? 'manager'
+          : 'employee';
+
+      const ssoUser: User = {
+        id: `usr_sso_${Date.now()}`,
+        email: cleanEmail,
+        firstName: params.firstName || cleanEmail.split('@')[0] || 'VeloTime',
+        lastName: params.lastName || '',
+        role: ssoRole,
+        organization: {
+          id: `org_sso_${Date.now()}`,
+          name: params.orgName || 'VeloTime Workspace',
+          tier: 'pro',
+        },
+      };
+
+      await signIn(cleanEmail, liveToken, ssoUser);
+      setPreviewRole(ssoRole);
+      if (params.orgName) {
+        await updateOrgSettings({ orgName: params.orgName });
+      }
+      return { ok: true };
+    } catch (err: any) {
+      return {
+        ok: false,
+        error: err?.message || 'Unable to connect to Google Sign-In.',
+      };
     }
-
-    const params = parseAuthCallbackParams(result.url);
-    const liveToken = params.token;
-    if (!liveToken) {
-      throw new Error('Could not complete VeloTime Cloud sign-in.');
-    }
-
-    const cleanEmail = (params.email || 'member@velotime.com').trim().toLowerCase();
-    const rawRole = (params.role || 'admin').toLowerCase();
-    const ssoRole: UserRole =
-      rawRole === 'admin' || rawRole === 'owner'
-        ? 'admin'
-        : rawRole === 'manager'
-        ? 'manager'
-        : 'employee';
-
-    const ssoUser: User = {
-      id: `usr_sso_${Date.now()}`,
-      email: cleanEmail,
-      firstName: params.firstName || cleanEmail.split('@')[0] || 'VeloTime',
-      lastName: params.lastName || '',
-      role: ssoRole,
-      organization: {
-        id: `org_sso_${Date.now()}`,
-        name: params.orgName || 'VeloTime Workspace',
-        tier: 'pro',
-      },
-    };
-
-    await signIn(cleanEmail, liveToken, ssoUser);
-    setPreviewRole(ssoRole);
-    if (params.orgName) {
-      await updateOrgSettings({ orgName: params.orgName });
-    }
-    return true;
   };
 
   const enterDemoMode = async () => {
