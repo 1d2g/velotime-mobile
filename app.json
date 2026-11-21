@@ -10,6 +10,8 @@
     "backgroundColor": "#090D16",
     "ios": {
       "supportsTablet": true,
+      "requireFullScreen": true,
+      "usesAppleSignIn": true,
       "bundleIdentifier": "com.dgtools.velotime",
       "infoPlist": {
         "NSFaceIDUsageDescription": "Allow VeloTime to quickly unlock your timesheet.",
@@ -44,7 +46,8 @@
       "expo-secure-store",
       "expo-font",
       "expo-status-bar",
-      "expo-web-browser"
+      "expo-web-browser",
+      "expo-apple-authentication"
     ],
     "experiments": {
       "typedRoutes": true

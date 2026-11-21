@@ -398,7 +398,7 @@ export default function SettingsScreen() {
                 </Text>
                 <Text style={[styles.rowSubtitle, { color: colors.textDim }]}>
                   {isBiometricSupported
-                    ? 'Encrypt workspace session in iOS Keychain (zero Clerk config required)'
+                    ? 'Protect your workspace session with iOS Keychain'
                     : 'Biometric hardware not enrolled on this device'}
                 </Text>
               </View>
@@ -771,7 +771,7 @@ export default function SettingsScreen() {
 
           <TouchableOpacity
             style={styles.settingsRow}
-            onPress={() => openExternalUrl('https://velotime.dg.tools')}
+            onPress={() => openExternalUrl('https://velotime.dg.tools/support')}
           >
             <View style={styles.rowLeft}>
               <HelpCircle color={colors.primary} size={18} style={styles.rowIcon} />

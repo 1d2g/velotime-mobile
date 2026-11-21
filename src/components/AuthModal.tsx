@@ -13,6 +13,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
+import * as AppleAuthentication from 'expo-apple-authentication';
 import Svg, { Path } from 'react-native-svg';
 import {
   ScanFace,
@@ -53,7 +54,7 @@ function GoogleLogo({ size = 20 }: { size?: number }) {
 }
 
 export function AuthModal() {
-  const { colors } = useTheme();
+  const { colors, isDark } = useTheme();
   const {
     user,
     isLoading,
@@ -67,6 +68,7 @@ export function AuthModal() {
     authenticateWithFaceId,
     signInWithWorkspace,
     signInWithCloudSSO,
+    signInWithApple,
     enterDemoMode,
     orgSettings,
   } = useAuth();
@@ -77,9 +79,19 @@ export function AuthModal() {
   const [enableBiometrics, setEnableBiometrics] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [ssoLoading, setSsoLoading] = useState(false);
+  const [appleLoading, setAppleLoading] = useState(false);
+  const [appleAuthAvailable, setAppleAuthAvailable] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
 
   const visible = !isLoading && (isAuthModalOpen || user === null || isBiometricLocked);
+
+  useEffect(() => {
+    if (Platform.OS === 'ios') {
+      AppleAuthentication.isAvailableAsync()
+        .then(setAppleAuthAvailable)
+        .catch(() => setAppleAuthAvailable(false));
+    }
+  }, []);
 
   useEffect(() => {
     if (visible && user && !isDemoMode) {
@@ -98,23 +110,51 @@ export function AuthModal() {
 
   const handleFaceIdPress = async () => {
     setErrorText(null);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    if (Platform.OS !== 'web') {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+    }
     const ok = await authenticateWithFaceId();
     if (!ok) {
       setErrorText(`Could not verify ${biometricLabel}. Try again or sign in below.`);
-    } else {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } else if (Platform.OS !== 'web') {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+    }
+  };
+
+  const handleAppleSignIn = async () => {
+    setErrorText(null);
+    if (Platform.OS !== 'web') {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    }
+    setAppleLoading(true);
+    try {
+      const res = await signInWithApple();
+      if (res.ok) {
+        if (Platform.OS !== 'web') {
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+        }
+      } else if (res.error) {
+        setErrorText(res.error);
+      }
+    } catch (err: any) {
+      setErrorText(err?.message || 'Unable to complete Sign in with Apple.');
+    } finally {
+      setAppleLoading(false);
     }
   };
 
   const handleCloudSSO = async () => {
     setErrorText(null);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    if (Platform.OS !== 'web') {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    }
     setSsoLoading(true);
     try {
       const res = await signInWithCloudSSO();
       if (res.ok) {
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        if (Platform.OS !== 'web') {
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+        }
       } else if (res.error) {
         setErrorText(res.error);
       }
@@ -147,7 +187,9 @@ export function AuthModal() {
         enableBiometrics: isBiometricSupported && enableBiometrics,
       });
       setPassword('');
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      if (Platform.OS !== 'web') {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+      }
     } catch (err: any) {
       setErrorText(err?.message || 'Unable to sign in right now. Please try again.');
     } finally {
@@ -157,7 +199,9 @@ export function AuthModal() {
 
   const handleDemoStudio = async () => {
     setErrorText(null);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    if (Platform.OS !== 'web') {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    }
     await enterDemoMode();
   };
 
@@ -189,7 +233,7 @@ export function AuthModal() {
               <Text style={[styles.headerSub, { color: colors.textMuted }]}>
                 {isBiometricLocked
                   ? `${biometricLabel} protection enabled`
-                  : 'Sign in with Google or your work email to sync your timesheets.'}
+                  : 'Sign in with Apple, Google, or your work email to sync your timesheets.'}
               </Text>
             </View>
           </View>
@@ -273,11 +317,34 @@ export function AuthModal() {
                 </TouchableOpacity>
               )}
 
+              {/* Native Sign in with Apple Button (iOS Guideline 4.8) */}
+              {Platform.OS === 'ios' && appleAuthAvailable && (
+                <View
+                  pointerEvents={appleLoading || ssoLoading || submitting ? 'none' : 'auto'}
+                  style={{ opacity: appleLoading || ssoLoading || submitting ? 0.7 : 1 }}
+                >
+                  <AppleAuthentication.AppleAuthenticationButton
+                    buttonType={AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN}
+                    buttonStyle={
+                      isDark
+                        ? AppleAuthentication.AppleAuthenticationButtonStyle.WHITE
+                        : AppleAuthentication.AppleAuthenticationButtonStyle.BLACK
+                    }
+                    cornerRadius={12}
+                    style={styles.appleBtn}
+                    onPress={handleAppleSignIn}
+                  />
+                </View>
+              )}
+
               {/* Dedicated Sign in with Google Button */}
               <TouchableOpacity
-                style={[styles.googleBtn, { opacity: ssoLoading || submitting ? 0.7 : 1 }]}
+                style={[
+                  styles.googleBtn,
+                  { opacity: appleLoading || ssoLoading || submitting ? 0.7 : 1 },
+                ]}
                 onPress={handleCloudSSO}
-                disabled={ssoLoading || submitting}
+                disabled={appleLoading || ssoLoading || submitting}
                 activeOpacity={0.85}
                 accessibilityRole="button"
                 accessibilityLabel="Sign in with Google"
@@ -383,10 +450,13 @@ export function AuthModal() {
                 <TouchableOpacity
                   style={[
                     styles.primaryBtn,
-                    { backgroundColor: colors.primary, opacity: submitting || ssoLoading ? 0.7 : 1 },
+                    {
+                      backgroundColor: colors.primary,
+                      opacity: appleLoading || submitting || ssoLoading ? 0.7 : 1,
+                    },
                   ]}
                   onPress={handleEmailSignIn}
-                  disabled={submitting || ssoLoading}
+                  disabled={appleLoading || submitting || ssoLoading}
                   activeOpacity={0.85}
                 >
                   {submitting ? (
@@ -493,6 +563,10 @@ const styles = StyleSheet.create({
   },
   faceIdTitle: { fontSize: 16, fontWeight: '700' },
   faceIdSub: { fontSize: 12, marginTop: 2 },
+  appleBtn: {
+    width: '100%',
+    height: 48,
+  },
   googleBtn: {
     flexDirection: 'row',
     alignItems: 'center',

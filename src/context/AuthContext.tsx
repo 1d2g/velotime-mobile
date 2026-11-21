@@ -1,7 +1,9 @@
 import React, { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react';
+import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as LocalAuthentication from 'expo-local-authentication';
 import * as WebBrowser from 'expo-web-browser';
+import * as AppleAuthentication from 'expo-apple-authentication';
 import {
   User,
   API_BASE,
@@ -86,6 +88,7 @@ interface AuthContextType {
   signIn: (email: string, token: string, userObj?: User) => Promise<void>;
   signInWithWorkspace: (params: SignInWorkspaceParams) => Promise<void>;
   signInWithCloudSSO: () => Promise<{ ok: boolean; error?: string }>;
+  signInWithApple: () => Promise<{ ok: boolean; error?: string }>;
   enterDemoMode: () => Promise<void>;
   signOut: () => Promise<void>;
   deleteAccount: () => Promise<void>;
@@ -457,6 +460,75 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const signInWithApple = async (): Promise<{ ok: boolean; error?: string }> => {
+    if (Platform.OS !== 'ios') {
+      return { ok: false, error: 'Sign in with Apple is only available on iOS devices.' };
+    }
+
+    try {
+      const credential = await AppleAuthentication.signInAsync({
+        requestedScopes: [
+          AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+          AppleAuthentication.AppleAuthenticationScope.EMAIL,
+        ],
+      });
+
+      if (!credential.identityToken) {
+        return { ok: false, error: 'Apple Sign-In did not return an identity token.' };
+      }
+
+      const res = await fetch(`${API_BASE}/api/v1/mobile/auth/apple`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          identityToken: credential.identityToken,
+          user: credential.user,
+          email: credential.email,
+          fullName: credential.fullName,
+        }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.token || !data?.user) {
+        return { ok: false, error: data?.error || `Apple Sign-In failed (${res.status})` };
+      }
+
+      const serverUser: User = data.user;
+      const rawRole = (serverUser.role || 'admin').toLowerCase();
+      const normalizedRole: UserRole =
+        rawRole === 'admin' || rawRole === 'owner'
+          ? 'admin'
+          : rawRole === 'manager'
+          ? 'manager'
+          : 'employee';
+
+      await signIn(serverUser.email, data.token, serverUser);
+      setPreviewRole(normalizedRole);
+
+      const serverOrg = data.user.organization as any;
+      await updateOrgSettings({
+        orgName: serverOrg?.name || orgSettings.orgName || 'VeloTime Workspace',
+        ...(serverOrg?.invoicePrefix ? { invoicePrefix: serverOrg.invoicePrefix } : {}),
+        ...(typeof serverOrg?.nextInvoiceNumber === 'number'
+          ? { nextInvoiceNumber: serverOrg.nextInvoiceNumber }
+          : {}),
+        ...(typeof serverOrg?.timerRoundingMinutes === 'number'
+          ? { timerRoundingMinutes: serverOrg.timerRoundingMinutes as 0 | 5 | 6 | 15 }
+          : {}),
+      });
+
+      return { ok: true };
+    } catch (err: any) {
+      if (err?.code === 'ERR_REQUEST_CANCELED') {
+        return { ok: false };
+      }
+      return {
+        ok: false,
+        error: err?.message || 'Unable to complete Sign in with Apple.',
+      };
+    }
+  };
+
   const enterDemoMode = async () => {
     await setStoredToken(null);
     await AsyncStorage.setItem('velotime_is_demo', 'true');
@@ -489,7 +561,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       try {
         await fetch(`${API_BASE}/api/account`, {
           method: 'DELETE',
-          headers: { Authorization: `Bearer ${token}` },
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+            'x-user-id': user?.id || '',
+            'x-user-email': user?.email || '',
+          },
+          body: JSON.stringify({
+            userId: user?.id,
+            email: user?.email,
+          }),
         });
       } catch {
         // Proceed with full local erasure even if offline/demo
@@ -533,6 +614,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         signIn,
         signInWithWorkspace,
         signInWithCloudSSO,
+        signInWithApple,
         enterDemoMode,
         signOut,
         deleteAccount,
